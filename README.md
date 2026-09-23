@@ -1,93 +1,121 @@
-# agentbox-sdk-go
+# GMI AgentBox SDK for Go
 
+Thin Go client for AgentBox.
 
+Public types are **Agent** (registered template) and **Sandbox** (launched
+container). Registering an Agent does not start anything.
 
-## Getting started
+- [Usage](docs/usage.md) — install, auth, register, launch, wait, cleanup
+- [Reference](docs/reference.md) — client, methods, models, errors
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Install
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.com/product-center/elastic-cloud/agentbox-sdk-go.git
-git branch -M main
-git push -uf origin main
+```bash
+go get github.com/GMISWE/agentbox-sdk-go
 ```
 
-## Integrate with your tools
+Requires Go 1.25+.
 
-* [Set up project integrations](https://gitlab.com/product-center/elastic-cloud/agentbox-sdk-go/-/settings/integrations)
+## Auth
 
-## Collaborate with your team
+```bash
+export GMI_AGENTBOX_API_KEY="your-api-key"
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+`GMI_AGENTBOX_API_KEY` is required (or pass `agentbox.WithAPIKey(...)`).
+`GMI_AGENTBOX_BASE_URL` is optional and defaults to production
+`https://console.gmicloud.ai`.
 
-## Test and Deploy
+## Quickstart
 
-Use the built-in continuous integration in GitLab.
+```go
+package main
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
 
-***
+	"github.com/GMISWE/agentbox-sdk-go/agentbox"
+)
 
-# Editing this README
+func waitForTemplate(ctx context.Context, agent *agentbox.Agent) error {
+	deadline := time.Now().Add(10 * time.Minute)
+	for {
+		if err := agent.Refresh(ctx); err != nil {
+			return err
+		}
+		switch agent.TemplateBuildStatus() {
+		case "", "ready":
+			return nil
+		case "error":
+			return fmt.Errorf("template build failed: %s", agent.TemplateBuildError())
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("template build timed out")
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+func main() {
+	ctx := context.Background()
 
-## Suggestions for a good README
+	client, err := agentbox.NewClient()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+	// Discover available IDCs and SKUs, then pass explicit values.
+	// The SDK does not pick IDC or instance_type for you.
+	idcID := "us-central-iowa2"
+	instanceType := "gmi.sandbox.x-small"
 
-## Name
-Choose a self-explaining name for your project.
+	agent, err := client.Agents.Create(ctx, agentbox.AgentCreateParams{
+		Title:        "agentbox-demo",
+		ImageURL:     "docker.io/library/alpine:3.20",
+		Idc:          idcID,
+		InstanceType: instanceType,
+		Runtime:      "sandbox",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	// agent.GeneratedAPIKey() is plaintext only on this response
+	defer agent.Delete(ctx)
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+	if err := waitForTemplate(ctx, agent); err != nil {
+		log.Print(err)
+		return
+	}
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+	sandbox, err := agent.Launch(ctx, agentbox.LaunchParams{InstanceType: instanceType})
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	defer sandbox.Delete(ctx)
+	if err := sandbox.WaitUntilRunning(ctx, agentbox.WaitUntilRunningParams{}); err != nil {
+		log.Print(err)
+		return
+	}
+	fmt.Println(sandbox.EndpointURL())
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+	execution, err := sandbox.Execute(ctx, "echo hello", agentbox.ExecuteParams{})
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	fmt.Println(execution.Status(), execution.Data["stdout"])
+}
+```
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+`GET /products?idc_name=` takes an **idcId** from `GET /idcs`, not a region
+label. Launch cannot change the Agent's IDC.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+`Sandboxes.List` omits `stopped` and `deleted` unless you pass `Status`.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Sandbox runtimes also support command execution, file upload/download, and an
+interactive WebSocket shell. See the reference for `Sandbox.Execute`,
+`Sandbox.UploadFile`, `Sandbox.DownloadFile`, and `Sandbox.Shell`.
