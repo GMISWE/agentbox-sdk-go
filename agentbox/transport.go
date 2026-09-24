@@ -54,7 +54,9 @@ func defaultTransport(httpClient *http.Client) Transport {
 		if err != nil {
 			return nil, &TransportError{Message: err.Error()}
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {

@@ -282,7 +282,9 @@ func (c *Client) stream(ctx context.Context, path string) (*Stream, error) {
 		return nil, err
 	}
 	if raw.StatusCode >= 400 {
-		defer raw.Close()
+		defer func() {
+			_ = raw.Close()
+		}()
 		var body []byte
 		for raw.Lines.Scan() {
 			body = append(body, raw.Lines.Bytes()...)
