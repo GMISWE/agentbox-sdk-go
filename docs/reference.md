@@ -132,6 +132,39 @@ current state.
 
 Sandboxes for this Agent.
 
+#### `ListBuilds(ctx, slug string) ([]TemplateBuild, error)`
+
+`agent.ListBuilds(ctx)` calls this with `agent.Slug()`.
+
+Returns up to the newest 100 sandbox template builds. There is no page
+parameter. Container deployments return `501` (`IsNotSupportedError`).
+
+#### `GetBuild(ctx, slug, buildID string) (TemplateBuild, error)`
+
+`agent.GetBuild(ctx, buildID)` calls this with `agent.Slug()`.
+
+Same object as one `ListBuilds` item. Poll `Status` until `ready` or `error`.
+
+#### `BuildLogs(ctx, slug, buildID string, BuildLogParams) (BuildLogPage, error)`
+
+`agent.BuildLogs(ctx, buildID, params)` calls this with `agent.Slug()`.
+
+Logs are paged, not streamed.
+
+| Field | Query | Default | Notes |
+|---|---|---|---|
+| `Offset` | `offset` | `0` | Zero-based. Pass the previous page's `NextOffset`. |
+| `Limit` | `limit` | `100` | Page size, 1–100. `0` sends `100`. |
+| `Level` | `level` | omitted | Optional: `debug`, `info`, `warn`, or `error`. |
+
+`HasMore` false means nothing more is available right now. While `Status` is
+`waiting` or `building`, poll again from `NextOffset`. After the build
+reaches `ready` or `error`, read one last page from that offset.
+
+`410` (`IsGoneError`, message `build_logs_expired`) means the runtime
+reclaimed the logs. Stop reading. That includes successful builds and is not
+a build failure. GMI does not persist these logs.
+
 ## Sandboxes
 
 ### `client.Sandboxes`
@@ -303,6 +336,37 @@ Use `IdcID()` when selecting an Agent or Sandbox location.
 
 ## Result types
 
+### `TemplateBuild`
+
+| Field | Type | Notes |
+|---|---|---|
+| `ID` | `string` | Build ID |
+| `TemplateID` | `string` | Sandbox template ID |
+| `Status` | `string` | `waiting`, `building`, `ready`, or `error` |
+| `Trigger` | `string` | For example `initial_build` |
+| `SourceType` | `string` | For example `image` |
+| `ArtifactState` | `string` | For example `absent` |
+| `CreatedAt` | `time.Time` | |
+| `StartedAt` | `*time.Time` | Nil until the build starts |
+| `FinishedAt` | `*time.Time` | Nil until the build finishes |
+| `Failure` | `*TemplateBuildFailure` | Set only when `Status` is `error` |
+
+`TemplateBuildFailure` fields: `Code` (for example `TemplateBuild.OutOfMemory`)
+and `Message`. `Message` is safe to show to end users.
+
+### `BuildLogPage`
+
+| Field | Type | Notes |
+|---|---|---|
+| `Entries` | `[]BuildLogEntry` | Log lines in this page |
+| `NextOffset` | `int` | Pass as the next `Offset` |
+| `HasMore` | `bool` | False means nothing more right now |
+
+`BuildLogEntry` fields: `Offset`, `Level`, `Message`, `Timestamp` (`*time.Time`,
+nil when the runtime omits it).
+
+`BuildLogParams` fields: `Offset`, `Limit`, `Level`. See `BuildLogs`.
+
 ### `Page[T]`
 
 ```go
@@ -354,8 +418,10 @@ All SDK errors are ordinary Go `error` values; use `errors.As` to unwrap
 | `ErrorKindNotFound` | `IsNotFoundError(err)` | 404 |
 | `ErrorKindConflict` | `IsConflictError(err)` | 409 |
 | `ErrorKindUnprocessable` | `IsUnprocessableError(err)` | 422 |
+| `ErrorKindGone` | `IsGoneError(err)` | 410 |
 | `ErrorKindRateLimit` | `IsRateLimitError(err)` | 429 |
-| `ErrorKindServer` | `IsServerError(err)` | 5xx |
+| `ErrorKindNotSupported` | `IsNotSupportedError(err)` | 501 |
+| `ErrorKindServer` | `IsServerError(err)` | 5xx other than 501 |
 | `ErrorKindGeneric` | — | other |
 
 `APIError` fields: `StatusCode`, `Message`, `Code`, `Details`.
@@ -371,6 +437,7 @@ DefaultBaseURL, DefaultWaitTimeout, Version
 Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
     WithTransport, WithStreamTransport, WithShellDialer, WithSleep
 Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams
+TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams
 Sandbox, SandboxCollection, SandboxListParams, ExecuteParams,
     WaitUntilRunningParams, MetricsParams, MetricsTimeseriesParams
 Execution, FileDownload, MetricSeries, MetricsBatch

@@ -37,7 +37,9 @@ const (
 	ErrorKindNotFound         ErrorKind = "not_found"
 	ErrorKindConflict         ErrorKind = "conflict"
 	ErrorKindUnprocessable    ErrorKind = "unprocessable"
+	ErrorKindGone             ErrorKind = "gone"
 	ErrorKindRateLimit        ErrorKind = "rate_limit"
+	ErrorKindNotSupported     ErrorKind = "not_supported"
 	ErrorKindServer           ErrorKind = "server_error"
 )
 
@@ -75,10 +77,22 @@ func IsConflictError(err error) bool { return isAPIErrorKind(err, ErrorKindConfl
 // IsUnprocessableError reports whether err is an APIError for HTTP 422.
 func IsUnprocessableError(err error) bool { return isAPIErrorKind(err, ErrorKindUnprocessable) }
 
+// IsGoneError reports whether err is an APIError for HTTP 410.
+// Build log reads return this when the runtime has reclaimed the artifact
+// (build_logs_expired). Stop reading; the logs are gone, including for
+// successful builds. This is not a build failure.
+func IsGoneError(err error) bool { return isAPIErrorKind(err, ErrorKindGone) }
+
 // IsRateLimitError reports whether err is an APIError for HTTP 429.
 func IsRateLimitError(err error) bool { return isAPIErrorKind(err, ErrorKindRateLimit) }
 
-// IsServerError reports whether err is an APIError for an HTTP 5xx status.
+// IsNotSupportedError reports whether err is an APIError for HTTP 501.
+// Template build APIs return this for container deployments
+// (not_supported_by_runtime). Do not retry it as a transient server error.
+func IsNotSupportedError(err error) bool { return isAPIErrorKind(err, ErrorKindNotSupported) }
+
+// IsServerError reports whether err is an APIError for an HTTP 5xx status
+// other than 501.
 func IsServerError(err error) bool { return isAPIErrorKind(err, ErrorKindServer) }
 
 func isAPIErrorKind(err error, kind ErrorKind) bool {
@@ -98,10 +112,14 @@ func errorKindForStatus(statusCode int) ErrorKind {
 		return ErrorKindNotFound
 	case 409:
 		return ErrorKindConflict
+	case 410:
+		return ErrorKindGone
 	case 422:
 		return ErrorKindUnprocessable
 	case 429:
 		return ErrorKindRateLimit
+	case 501:
+		return ErrorKindNotSupported
 	}
 	if statusCode >= 500 {
 		return ErrorKindServer

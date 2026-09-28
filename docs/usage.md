@@ -299,6 +299,69 @@ if caps := sandbox.Capabilities(); caps["logs_stream"] == true {
 When unavailable, these calls return an unsupported-runtime error. A backend
 can enable the capability without requiring an SDK update.
 
+## Template build logs
+
+Sandbox Agents expose paged template build logs. Container Agents return
+`501` (`IsNotSupportedError`). GMI does not persist these logs.
+
+```go
+func followBuildLogs(ctx context.Context, agent *agentbox.Agent) error {
+	builds, err := agent.ListBuilds(ctx)
+	if err != nil {
+		return err
+	}
+	if len(builds) == 0 {
+		return fmt.Errorf("no template builds")
+	}
+	buildID := builds[0].ID
+	offset := 0
+	for {
+		page, err := agent.BuildLogs(ctx, buildID, agentbox.BuildLogParams{Offset: offset})
+		if agentbox.IsGoneError(err) {
+			fmt.Println("logs no longer available")
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for _, entry := range page.Entries {
+			fmt.Println(entry.Level, entry.Message)
+		}
+		offset = page.NextOffset
+		if page.HasMore {
+			continue
+		}
+		build, err := agent.GetBuild(ctx, buildID)
+		if err != nil {
+			return err
+		}
+		if build.Status == "ready" || build.Status == "error" {
+			final, err := agent.BuildLogs(ctx, buildID, agentbox.BuildLogParams{Offset: offset})
+			if agentbox.IsGoneError(err) {
+				fmt.Println("logs no longer available")
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			for _, entry := range final.Entries {
+				fmt.Println(entry.Level, entry.Message)
+			}
+			if build.Status == "error" && build.Failure != nil {
+				return fmt.Errorf("%s", build.Failure.Message)
+			}
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+```
+
+`HasMore` false only means nothing more is available right now. Keep polling
+from `NextOffset` while the build is `waiting` or `building`, then read one
+last page after it reaches `ready` or `error`. `410` means the logs are gone,
+including for a successful build.
+
 ## Eligibility and metrics
 
 ```go
@@ -340,4 +403,6 @@ if agentbox.IsNotFoundError(err) {
 
 `401` is `ErrorKindAuthentication` (for example, when the API key is
 invalid). `422` is `ErrorKindUnprocessable` (locked field / template
-mismatch). See [Reference](https://docs.gmicloud.ai/api-reference/agentbox-sdk/reference).
+mismatch). `410` is `ErrorKindGone` (template build logs reclaimed). `501`
+is `ErrorKindNotSupported` (template build APIs on a container Agent) and is
+not retried as a server error. See [Reference](https://docs.gmicloud.ai/api-reference/agentbox-sdk/reference).
