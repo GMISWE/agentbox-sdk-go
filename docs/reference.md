@@ -16,7 +16,7 @@ func NewClient(opts ...Option) (*Client, error)
 | Option | Default | Notes |
 |---|---|---|
 | `WithAPIKey(key)` | `GMI_AGENTBOX_API_KEY` | Required API key. `NewClient` errors if unset |
-| `WithBaseURL(url)` | `GMI_AGENTBOX_BASE_URL` or `DefaultBaseURL` | Optional service origin. Production origin if unset |
+| `WithBaseURL(url)` | `GMI_AGENTBOX_BASE_URL` or `DefaultBaseURL` | Optional API root, including the path prefix. Production root if unset |
 | `WithTimeout(d)` | `30 * time.Second` | Per HTTP call |
 | `WithHTTPClient(c)` | internal default | Overrides the `*http.Client` used by the default transport |
 | `WithTransport(t)` | internal default | Overrides the request/response transport (for testing) |
@@ -24,7 +24,8 @@ func NewClient(opts ...Option) (*Client, error)
 | `WithShellDialer(d)` | internal default | Overrides the WebSocket shell dialer (for testing) |
 | `WithSleep(f)` | `time.Sleep` | Overrides the sleep function used by `WaitUntilRunning` polling |
 
-`DefaultBaseURL` is `https://console.gmicloud.ai`.
+`DefaultBaseURL` is `https://api.gmi-serving.com/v1/agents`.
+The TOT integration root is `https://ce-tot.gmicloud-dev.com/api/v1/ie/container`.
 `DefaultWaitTimeout` is `300 * time.Second` (`Sandbox.WaitUntilRunning`).
 
 Collections on the client: `Agents`, `Sandboxes`, `Idcs`, `Products`.
@@ -47,7 +48,7 @@ Returns the organization's available runtimes and data centers.
 | Variable | Used by |
 |---|---|
 | `GMI_AGENTBOX_API_KEY` | Required API key |
-| `GMI_AGENTBOX_BASE_URL` | Optional service origin; defaults to `DefaultBaseURL` |
+| `GMI_AGENTBOX_BASE_URL` | Optional API root; defaults to `DefaultBaseURL` |
 
 Errors expose `Message`, `Code`, and `Details` when supplied by the service.
 
