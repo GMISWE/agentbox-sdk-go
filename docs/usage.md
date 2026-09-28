@@ -30,11 +30,12 @@ Or pass it explicitly:
 client, err := agentbox.NewClient(agentbox.WithAPIKey("your-api-key"))
 ```
 
-Default service origin is production (used when `GMI_AGENTBOX_BASE_URL` is unset):
+The default API root is production (used when `GMI_AGENTBOX_BASE_URL` is unset):
 
-`https://console.gmicloud.ai`
+`https://api.gmi-serving.com/v1/agents`
 
-Override with `GMI_AGENTBOX_BASE_URL` or `agentbox.WithBaseURL(...)`.
+Resource paths such as `/deployments` and `/tasks` are joined onto that root.
+Override the full root with `GMI_AGENTBOX_BASE_URL` or `agentbox.WithBaseURL(...)`.
 
 ## Quickstart
 

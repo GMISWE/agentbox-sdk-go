@@ -23,8 +23,8 @@ export GMI_AGENTBOX_API_KEY="your-api-key"
 ```
 
 `GMI_AGENTBOX_API_KEY` is required (or pass `agentbox.WithAPIKey(...)`).
-`GMI_AGENTBOX_BASE_URL` is optional and defaults to production
-`https://console.gmicloud.ai`.
+`GMI_AGENTBOX_BASE_URL` is optional and defaults to the production API root
+`https://api.gmi-serving.com/v1/agents`.
 
 ## Quickstart
 

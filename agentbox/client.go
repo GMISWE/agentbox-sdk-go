@@ -16,16 +16,15 @@ import (
 	"time"
 )
 
-// DefaultBaseURL is the production AgentBox service origin.
-const DefaultBaseURL = "https://console.gmicloud.ai"
+// DefaultBaseURL is the production AgentBox API root. Resource paths such as
+// /deployments and /tasks are joined onto this URL.
+const DefaultBaseURL = "https://api.gmi-serving.com/v1/agents"
 
 // DefaultWaitTimeout is the default timeout for Sandbox.WaitUntilRunning.
 const DefaultWaitTimeout = 300 * time.Second
 
 // Version is the SDK version.
 const Version = "0.1.0"
-
-const servicePath = "/api/v1/ie/container"
 
 const (
 	runningStatus = "running"
@@ -66,8 +65,9 @@ func WithAPIKey(apiKey string) Option {
 	return func(c *Client) { c.APIKey = apiKey }
 }
 
-// WithBaseURL sets the service origin explicitly, overriding
-// GMI_AGENTBOX_BASE_URL.
+// WithBaseURL sets the API root explicitly, overriding GMI_AGENTBOX_BASE_URL.
+// The value includes the API prefix. Production is DefaultBaseURL. The TOT
+// integration root is https://ce-tot.gmicloud-dev.com/api/v1/ie/container.
 func WithBaseURL(baseURL string) Option {
 	return func(c *Client) { c.BaseURL = baseURL }
 }
@@ -113,7 +113,7 @@ func defaultBaseURL() string {
 }
 
 // NewClient constructs an AgentBox client. The API key defaults to
-// GMI_AGENTBOX_API_KEY and is required (via option or env var). The base URL
+// GMI_AGENTBOX_API_KEY and is required (via option or env var). The API root
 // defaults to GMI_AGENTBOX_BASE_URL or DefaultBaseURL.
 func NewClient(opts ...Option) (*Client, error) {
 	c := &Client{
@@ -131,7 +131,7 @@ func NewClient(opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("agentbox: GMI_AGENTBOX_API_KEY is required (or use WithAPIKey)")
 	}
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
-	c.serviceURL = c.BaseURL + servicePath
+	c.serviceURL = c.BaseURL
 
 	if c.httpClient == nil {
 		c.httpClient = &http.Client{Timeout: c.timeout}
