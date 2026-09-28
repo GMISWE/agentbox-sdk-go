@@ -36,7 +36,6 @@ The default API root is production (used when `GMI_AGENTBOX_BASE_URL` is unset):
 
 Resource paths such as `/deployments` and `/tasks` are joined onto that root.
 Override the full root with `GMI_AGENTBOX_BASE_URL` or `agentbox.WithBaseURL(...)`.
-The TOT integration root is `https://ce-tot.gmicloud-dev.com/api/v1/ie/container`.
 
 ## Quickstart
 

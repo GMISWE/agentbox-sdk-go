@@ -25,7 +25,6 @@ func NewClient(opts ...Option) (*Client, error)
 | `WithSleep(f)` | `time.Sleep` | Overrides the sleep function used by `WaitUntilRunning` polling |
 
 `DefaultBaseURL` is `https://api.gmi-serving.com/v1/agents`.
-The TOT integration root is `https://ce-tot.gmicloud-dev.com/api/v1/ie/container`.
 `DefaultWaitTimeout` is `300 * time.Second` (`Sandbox.WaitUntilRunning`).
 
 Collections on the client: `Agents`, `Sandboxes`, `Idcs`, `Products`.
