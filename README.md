@@ -116,9 +116,9 @@ label. Launch cannot change the Agent's IDC.
 
 `Sandboxes.List` omits `stopped` and `deleted` unless you pass `Status`.
 
-Sandbox runtimes also support command execution, file upload/download, and an
-interactive WebSocket shell. See the reference for `Sandbox.Execute`,
-`Sandbox.UploadFile`, `Sandbox.DownloadFile`, and `Sandbox.Shell`.
+Sandbox runtimes also support command execution and file upload/download. See
+the reference for `Sandbox.Execute`, `Sandbox.UploadFile`, and
+`Sandbox.DownloadFile`.
 
 Sandbox template build logs are paged, not streamed. See `Agent.ListBuilds`,
 `Agent.GetBuild`, and `Agent.BuildLogs`.
