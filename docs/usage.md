@@ -205,6 +205,34 @@ fmt.Println(sandbox.Status(), sandbox.LastError(), sandbox.EndpointURL())
 `EndpointURL()` is empty until the sandbox is running, and can still be empty
 after `running`. Do not assume an HTTP URL is always present.
 
+## Metadata and expiry
+
+Both are sandbox-runtime only. `Metadata` is your own labels.
+`TimeoutSeconds` is the lifetime in seconds from now. Leave it unset to keep
+the platform TTL and auto-renew. A positive value pins the expiry. Read the
+effective timestamp from `sandbox.ExpiresAt()` after `Refresh` or
+`SetTimeout`.
+
+```go
+timeoutSeconds := 3600
+sandbox, err := agent.Launch(ctx, agentbox.LaunchParams{
+	InstanceType:   instanceType,
+	Metadata:       map[string]string{"session": "abc"},
+	TimeoutSeconds: &timeoutSeconds,
+})
+err = sandbox.Refresh(ctx)
+fmt.Println(sandbox.Metadata(), sandbox.ExpiresAt(), sandbox.ExpiryPinned())
+
+err = sandbox.SetTimeout(ctx, 6*3600)
+page, err := client.Sandboxes.List(ctx, agentbox.SandboxListParams{
+	Metadata: map[string]string{"session": "abc"},
+})
+```
+
+`SetTimeout` works while the sandbox is running or paused. It can shorten or
+extend the remaining lifetime, and it pins the sandbox so later reads do not
+auto-renew it.
+
 ## Run commands and transfer files
 
 ```go
@@ -251,7 +279,8 @@ The returned connection supports `Send`, `Recv`, and `Close`.
 page, err := client.Sandboxes.List(ctx, agentbox.SandboxListParams{}) // omits stopped and deleted
 page, err = client.Sandboxes.List(ctx, agentbox.SandboxListParams{Status: []string{"running", "creating", "error"}})
 page, err = client.Sandboxes.List(ctx, agentbox.SandboxListParams{AgentID: agent.ID(), Status: []string{"running"}})
-page, err = agent.Sandboxes(ctx, 1, 20) // this Agent's Sandboxes, including API defaults
+page, err = client.Sandboxes.List(ctx, agentbox.SandboxListParams{Metadata: map[string]string{"session": "abc"}})
+page, err = agent.ListSandboxes(ctx, agentbox.AgentSandboxListParams{Metadata: map[string]string{"session": "abc"}})
 ```
 
 The default Sandbox list **excludes** `stopped` and `deleted`.

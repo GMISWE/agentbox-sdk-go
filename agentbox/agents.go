@@ -93,6 +93,19 @@ type LaunchParams struct {
 	AssignPublicIP *bool
 	Ports          []map[string]any
 	Storages       []map[string]any
+	// Metadata is sandbox-runtime only. At most 32 keys; each key matches
+	// ^[A-Za-z0-9_.-]{1,63}$ and each value is at most 256 characters.
+	// source and task_name are reserved. A non-empty map on a container
+	// deployment is rejected with HTTP 422 (sandbox_only_field).
+	Metadata map[string]string
+	// TimeoutSeconds is the sandbox lifetime in seconds from launch, sandbox
+	// runtime only. Nil or 0 omits the field and keeps the platform TTL with
+	// read-path auto-renew. A positive value is sent as timeout_seconds and
+	// pins the expiry. Values below 60 are rejected with HTTP 400
+	// (invalid_timeout). A non-zero value on a container deployment is
+	// rejected with HTTP 422 (sandbox_only_field). Launch does not return
+	// expires_at; call Refresh to read it.
+	TimeoutSeconds *int
 }
 
 // Launch starts a Sandbox from this Agent. IdcName defaults to the Agent's
@@ -108,11 +121,28 @@ func (a *Agent) Launch(ctx context.Context, params LaunchParams) (*Sandbox, erro
 	return a.client.Sandboxes.launch(ctx, a.Slug(), params, idcName, a.ID())
 }
 
+// AgentSandboxListParams configures Agent.ListSandboxes.
+type AgentSandboxListParams struct {
+	Page     int
+	PageSize int
+	// Metadata filters with an exact match on each key. Keys are ANDed.
+	// The query is metadata[<key>]=<value>.
+	Metadata map[string]string
+}
+
 // Sandboxes lists the Sandboxes launched from this Agent.
 func (a *Agent) Sandboxes(ctx context.Context, page, pageSize int) (*Page[*Sandbox], error) {
+	return a.ListSandboxes(ctx, AgentSandboxListParams{Page: page, PageSize: pageSize})
+}
+
+// ListSandboxes lists the Sandboxes launched from this Agent.
+// Metadata filters match GET /deployments/{slug}/tasks.
+func (a *Agent) ListSandboxes(ctx context.Context, params AgentSandboxListParams) (*Page[*Sandbox], error) {
+	page := params.Page
 	if page == 0 {
 		page = 1
 	}
+	pageSize := params.PageSize
 	if pageSize == 0 {
 		pageSize = 20
 	}
@@ -123,7 +153,7 @@ func (a *Agent) Sandboxes(ctx context.Context, page, pageSize int) (*Page[*Sandb
 		PageSize int              `json:"page_size"`
 	}
 	err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s/tasks", a.Slug()),
-		map[string]any{"page": page, "page_size": pageSize}, nil, nil, &payload)
+		withMetadataQuery(map[string]any{"page": page, "page_size": pageSize}, params.Metadata), nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}

@@ -125,12 +125,30 @@ Same as `client.Agents.Update(ctx, agent.Slug(), fields)`, applied in place.
 `LaunchParams.IdcName` defaults to `agent.Idc()` when empty.
 Launch cannot change region; `IdcName` must match the Agent's data center.
 
+`Metadata` is sandbox-runtime only: up to 32 keys, key
+`^[A-Za-z0-9_.-]{1,63}$`, value at most 256 characters. `source` and
+`task_name` are reserved. A non-empty map on a container deployment is
+HTTP 422 `sandbox_only_field`. Invalid metadata is HTTP 400
+`invalid_metadata`.
+
+`TimeoutSeconds` is the sandbox lifetime in seconds from launch. Leave it
+nil, or set `0`, to keep the platform TTL and auto-renew. A positive value
+is sent as `timeout_seconds` and pins the expiry. The minimum is 60; a
+smaller value is HTTP 400 `invalid_timeout`. A non-zero value on a container
+deployment is HTTP 422 `sandbox_only_field`. Launch does not return the
+effective expiry — call `Refresh` and read `ExpiresAt`.
+
 Launch returns immediately. Call `Refresh` or `WaitUntilRunning` for
 current state.
 
 #### `agent.Sandboxes(ctx, page, pageSize int) (*Page[*Sandbox], error)`
 
 Sandboxes for this Agent.
+
+#### `agent.ListSandboxes(ctx, AgentSandboxListParams) (*Page[*Sandbox], error)`
+
+Same list. `Metadata` is an exact-match filter; keys are ANDed as
+`metadata[<key>]=<value>`.
 
 #### `ListBuilds(ctx, slug string) ([]TemplateBuild, error)`
 
@@ -179,9 +197,23 @@ Same body as `agent.Launch`. `LaunchParams.IdcName` is required here.
 |---|---|
 | `AgentID` | Restrict results to one Agent |
 | `Status` | `[]string`; joined with commas |
+| `Metadata` | Exact match per key, ANDed: `metadata[<key>]=<value>` |
 | `Page` / `PageSize` | pagination |
 
 If `Status` is omitted, the API **excludes** `stopped` and `deleted`.
+
+#### `SetTimeout(ctx, sandboxID string, timeoutSeconds int) (*SandboxExpiry, error)`
+
+Resets the lifetime to now + `timeoutSeconds` and pins it, so the sandbox is
+no longer auto-renewed. `timeoutSeconds` must be >= 60. Only a running or
+paused sandbox accepts it. `SandboxExpiry.ExpiresAt` is the upstream
+effective expiry.
+
+| Status | Message | Meaning |
+|---|---|---|
+| 400 | `invalid_timeout` | Lifetime is under 60 seconds or above the account maximum |
+| 409 | `task_not_running` | Sandbox is not running or paused |
+| 422 | `sandbox_only_operation` | Task is not a sandbox |
 
 #### `Get(ctx, sandboxID string) (*Sandbox, error)`
 
@@ -258,6 +290,13 @@ Represents a Sandbox.
 | `Runtime()` | `string` | Runtime name, e.g. `sandbox` |
 | `Capabilities()` | `map[string]any` | Server-derived enabled surfaces |
 | `ExpiresAt()` | `string` | Sandbox expiry timestamp |
+| `ExpiryPinned()` | `bool` | Caller chose the expiry; no auto-renew |
+| `Metadata()` | `map[string]string` | Launch labels; nil when unset |
+
+#### `sandbox.SetTimeout(ctx, timeoutSeconds int) error`
+
+Same as `client.Sandboxes.SetTimeout`. Updates `ExpiresAt` and
+`ExpiryPinned` from the response.
 
 #### `sandbox.Refresh(ctx) error`
 
@@ -436,9 +475,10 @@ import "github.com/GMISWE/agentbox-sdk-go/agentbox"
 DefaultBaseURL, DefaultWaitTimeout, Version
 Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
     WithTransport, WithStreamTransport, WithShellDialer, WithSleep
-Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams
+Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams,
+    AgentSandboxListParams
 TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams
-Sandbox, SandboxCollection, SandboxListParams, ExecuteParams,
+Sandbox, SandboxCollection, SandboxListParams, SandboxExpiry, ExecuteParams,
     WaitUntilRunningParams, MetricsParams, MetricsTimeseriesParams
 Execution, FileDownload, MetricSeries, MetricsBatch
 Idc, IdcCollection, Product, ProductCollection, ProductListParams
