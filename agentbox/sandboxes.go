@@ -171,11 +171,6 @@ func (s *Sandbox) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// Logs returns the Sandbox's log snapshot.
-func (s *Sandbox) Logs(ctx context.Context) (string, error) {
-	return s.client.Sandboxes.Logs(ctx, s.ID())
-}
-
 // MetricsParams configures Sandbox.Metrics / SandboxCollection.Metrics.
 type MetricsParams struct {
 	Start int64
@@ -451,15 +446,6 @@ func (sc *SandboxCollection) SetTimeout(ctx context.Context, sandboxID string, t
 		ExpiresAt:    payload.ExpiresAt,
 		ExpiryPinned: payload.ExpiryPinned,
 	}, nil
-}
-
-// Logs returns the Sandbox's log snapshot, or "" if unavailable.
-func (sc *SandboxCollection) Logs(ctx context.Context, sandboxID string) (string, error) {
-	var payload map[string]any
-	if err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/logs", sandboxID), nil, nil, nil, &payload); err != nil {
-		return "", err
-	}
-	return stringField(payload, "logs"), nil
 }
 
 // Metrics returns a bundle of metric timeseries for a Sandbox. Start/End are
