@@ -21,7 +21,6 @@ func NewClient(opts ...Option) (*Client, error)
 | `WithHTTPClient(c)` | internal default | Overrides the `*http.Client` used by the default transport |
 | `WithTransport(t)` | internal default | Overrides the request/response transport (for testing) |
 | `WithStreamTransport(t)` | internal default | Overrides the streaming transport (for testing) |
-| `WithShellDialer(d)` | internal default | Overrides the WebSocket shell dialer (for testing) |
 | `WithSleep(f)` | `time.Sleep` | Overrides the sleep function used by `WaitUntilRunning` polling |
 
 `DefaultBaseURL` is `https://api.gmi-serving.com/v1/agents`.
@@ -263,10 +262,6 @@ Uploads content to an absolute Sandbox path. `filename` defaults to
 
 Downloads a file from an absolute Sandbox path.
 
-#### `Shell(ctx, sandboxID string) (ShellConn, error)`
-
-Opens an interactive shell connection.
-
 ### `Sandbox`
 
 Represents a Sandbox.
@@ -318,10 +313,6 @@ request cancellation. `WaitTimeoutSeconds` is ignored when `Wait` is false.
 
 Returns `FileDownload{Content, Filename, Header}`. Paths must be absolute and
 cannot contain `.` or `..` segments.
-
-#### `sandbox.Shell(ctx) (ShellConn, error)`
-
-Returns an interactive connection supporting `Send`, `Recv`, and `Close`.
 
 #### `sandbox.Delete(ctx) error`
 
@@ -468,7 +459,7 @@ import "github.com/GMISWE/agentbox-sdk-go/agentbox"
 ```
 DefaultBaseURL, DefaultWaitTimeout, Version
 Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
-    WithTransport, WithStreamTransport, WithShellDialer, WithSleep
+    WithTransport, WithStreamTransport, WithSleep
 Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams,
     AgentSandboxListParams
 TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams
@@ -478,7 +469,6 @@ Execution, FileDownload, MetricSeries, MetricsBatch
 Idc, IdcCollection, Product, ProductCollection, ProductListParams
 Eligibility, Page[T]
 StreamEvent, Stream
-ShellConn, ShellDialer
 TransportError, SandboxFailed, SandboxWaitTimeout
 APIError, ErrorKind (+ ErrorKind* constants), Is*Error helpers
 ```
