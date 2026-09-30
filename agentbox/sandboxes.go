@@ -132,6 +132,35 @@ func (s *Sandbox) Capabilities() map[string]any {
 // ExpiresAt is the Sandbox expiry timestamp, if any.
 func (s *Sandbox) ExpiresAt() string { return stringField(s.Data, "expires_at") }
 
+// ExpiryPinned reports whether the caller chose the lifetime, at launch via
+// TimeoutSeconds or later via SetTimeout. A pinned sandbox is not auto-renewed.
+func (s *Sandbox) ExpiryPinned() bool {
+	v, _ := s.Data["expiry_pinned"].(bool)
+	return v
+}
+
+// Metadata is the caller's launch labels. Nil when the sandbox has none.
+// Platform keys (source, task_name) are not included.
+func (s *Sandbox) Metadata() map[string]string {
+	return stringMapField(s.Data, "metadata")
+}
+
+// SetTimeout resets this sandbox's lifetime to now + timeoutSeconds and pins
+// it. timeoutSeconds must be >= 60. Only a running or paused sandbox accepts
+// it. On success, ExpiresAt and ExpiryPinned are updated from the response.
+func (s *Sandbox) SetTimeout(ctx context.Context, timeoutSeconds int) error {
+	updated, err := s.client.Sandboxes.SetTimeout(ctx, s.ID(), timeoutSeconds)
+	if err != nil {
+		return err
+	}
+	if s.Data == nil {
+		s.Data = map[string]any{}
+	}
+	s.Data["expires_at"] = updated.ExpiresAt
+	s.Data["expiry_pinned"] = updated.ExpiryPinned
+	return nil
+}
+
 // Refresh reloads the Sandbox from the API.
 func (s *Sandbox) Refresh(ctx context.Context) error {
 	updated, err := s.client.Sandboxes.Get(ctx, s.ID())
@@ -283,6 +312,8 @@ func (sc *SandboxCollection) launch(ctx context.Context, slug string, params Lau
 		"ports":            portsOrNil(params.Ports),
 		"storages":         storagesOrNil(params.Storages),
 		"template_id":      nonEmptyString(templateID),
+		"metadata":         metadataOrNil(params.Metadata),
+		"timeout_seconds":  timeoutSecondsOrNil(params.TimeoutSeconds),
 	})
 
 	var payload struct {
@@ -294,18 +325,22 @@ func (sc *SandboxCollection) launch(ctx context.Context, slug string, params Lau
 		return nil, err
 	}
 
-	return &Sandbox{
-		client: sc.client,
-		Data: map[string]any{
-			"id":              payload.TaskID,
-			"container_id":    payload.ContainerID,
-			"task_status":     payload.Status,
-			"deployment_slug": slug,
-			"idc_name":        idcName,
-			"instance_type":   params.InstanceType,
-			"display_name":    params.DisplayName,
-		},
-	}, nil
+	data := map[string]any{
+		"id":              payload.TaskID,
+		"container_id":    payload.ContainerID,
+		"task_status":     payload.Status,
+		"deployment_slug": slug,
+		"idc_name":        idcName,
+		"instance_type":   params.InstanceType,
+		"display_name":    params.DisplayName,
+	}
+	if copied := stringMapToAny(params.Metadata); copied != nil {
+		data["metadata"] = copied
+	}
+	if timeoutSecondsOrNil(params.TimeoutSeconds) != nil {
+		data["expiry_pinned"] = true
+	}
+	return &Sandbox{client: sc.client, Data: data}, nil
 }
 
 // Launch starts a Sandbox from an Agent slug. Unlike Agent.Launch, idcName
@@ -316,10 +351,20 @@ func (sc *SandboxCollection) Launch(ctx context.Context, slug string, params Lau
 
 // SandboxListParams configures SandboxCollection.List.
 type SandboxListParams struct {
-	AgentID  string
-	Status   []string // if omitted, the API excludes "stopped" and "deleted"
+	AgentID string
+	Status  []string // if omitted, the API excludes "stopped" and "deleted"
+	// Metadata filters with an exact match on each key. Keys are ANDed.
+	// The query is metadata[<key>]=<value>.
+	Metadata map[string]string
 	Page     int
 	PageSize int
+}
+
+// SandboxExpiry is the effective expiry after Sandbox.SetTimeout.
+type SandboxExpiry struct {
+	TaskID       string
+	ExpiresAt    string
+	ExpiryPinned bool
 }
 
 // List returns a page of Sandboxes.
@@ -344,12 +389,12 @@ func (sc *SandboxCollection) List(ctx context.Context, params SandboxListParams)
 		Page     int              `json:"page"`
 		PageSize int              `json:"page_size"`
 	}
-	err := sc.client.request(ctx, http.MethodGet, "/tasks", compact(map[string]any{
+	err := sc.client.request(ctx, http.MethodGet, "/tasks", withMetadataQuery(compact(map[string]any{
 		"deployment_id": nonEmptyString(params.AgentID),
 		"status":        nonEmptyString(statusValue),
 		"page":          page,
 		"page_size":     pageSize,
-	}), nil, nil, &payload)
+	}), params.Metadata), nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -378,6 +423,34 @@ func (sc *SandboxCollection) Get(ctx context.Context, sandboxID string) (*Sandbo
 // restarted.
 func (sc *SandboxCollection) Delete(ctx context.Context, sandboxID string) error {
 	return sc.client.request(ctx, http.MethodDelete, fmt.Sprintf("/tasks/%s", sandboxID), nil, nil, nil, nil)
+}
+
+// SetTimeout resets a sandbox's lifetime to now + timeoutSeconds and pins it,
+// so it is no longer auto-renewed. timeoutSeconds must be >= 60. Only a
+// running or paused sandbox accepts it. The caller must be the task's
+// creator or an org owner. ExpiresAt on the result is the upstream effective
+// expiry.
+//
+// HTTP 400 invalid_timeout means the value is below 60 or above the account
+// maximum. HTTP 409 task_not_running means the sandbox is not running or
+// paused. HTTP 422 sandbox_only_operation means the task is not a sandbox.
+func (sc *SandboxCollection) SetTimeout(ctx context.Context, sandboxID string, timeoutSeconds int) (*SandboxExpiry, error) {
+	var payload struct {
+		TaskID       string `json:"task_id"`
+		ExpiresAt    string `json:"expires_at"`
+		ExpiryPinned bool   `json:"expiry_pinned"`
+	}
+	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/timeout", sandboxID), nil, map[string]any{
+		"timeout_seconds": timeoutSeconds,
+	}, nil, &payload)
+	if err != nil {
+		return nil, err
+	}
+	return &SandboxExpiry{
+		TaskID:       payload.TaskID,
+		ExpiresAt:    payload.ExpiresAt,
+		ExpiryPinned: payload.ExpiryPinned,
+	}, nil
 }
 
 // Logs returns the Sandbox's log snapshot, or "" if unavailable.
@@ -602,6 +675,79 @@ func nonEmptyString(s string) any {
 		return nil
 	}
 	return s
+}
+
+func metadataOrNil(metadata map[string]string) any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
+}
+
+func timeoutSecondsOrNil(seconds *int) any {
+	if seconds == nil || *seconds == 0 {
+		return nil
+	}
+	return *seconds
+}
+
+func stringMapToAny(values map[string]string) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func stringMapField(data map[string]any, key string) map[string]string {
+	if data == nil {
+		return nil
+	}
+	switch raw := data[key].(type) {
+	case map[string]string:
+		if len(raw) == 0 {
+			return nil
+		}
+		out := make(map[string]string, len(raw))
+		for k, v := range raw {
+			out[k] = v
+		}
+		return out
+	case map[string]any:
+		if len(raw) == 0 {
+			return nil
+		}
+		out := make(map[string]string, len(raw))
+		for k, v := range raw {
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			out[k] = s
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func withMetadataQuery(query map[string]any, metadata map[string]string) map[string]any {
+	if query == nil {
+		query = map[string]any{}
+	}
+	for key, value := range metadata {
+		if key == "" {
+			continue
+		}
+		query["metadata["+key+"]"] = value
+	}
+	return query
 }
 
 func storagesOrNil(storages []map[string]any) any {
