@@ -279,18 +279,12 @@ agent.Delete(ctx)   // does not stop or delete remaining sandboxes
 
 Always delete sandboxes you launched in tests. They bill the Console account.
 
-## Logs
+## Log stream
 
-The SDK supports log snapshots and streaming when the Sandbox provides the
-corresponding capability. Check `Capabilities()` for `logs` and `logs_stream`
-before calling them:
+The SDK supports log streaming when the Sandbox provides the `logs_stream`
+capability:
 
 ```go
-if caps := sandbox.Capabilities(); caps["logs"] == true {
-	logs, err := sandbox.Logs(ctx)
-	fmt.Println(logs)
-}
-
 if caps := sandbox.Capabilities(); caps["logs_stream"] == true {
 	stream, err := sandbox.Stream(ctx)
 	if err != nil {
@@ -310,7 +304,7 @@ if caps := sandbox.Capabilities(); caps["logs_stream"] == true {
 }
 ```
 
-When unavailable, these calls return an unsupported-runtime error. A backend
+When unavailable, this call returns an unsupported-runtime error. A backend
 can enable the capability without requiring an SDK update.
 
 ## Template build logs

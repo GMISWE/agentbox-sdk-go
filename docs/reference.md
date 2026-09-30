@@ -220,10 +220,6 @@ effective expiry.
 
 One-way. The sandbox cannot be restarted.
 
-#### `Logs(ctx, sandboxID string) (string, error)`
-
-Returns the `logs` string from the response payload, or `""`.
-
 #### `Metrics(ctx, sandboxID string, MetricsParams) (*MetricsBatch, error)`
 
 `Start` / `End` are unix seconds. `Kinds` is a `[]string`
@@ -241,8 +237,8 @@ Pull with `stream.Next() (StreamEvent, bool)`; check `stream.Err()` after
 `Next` returns `false`. Comment lines (`: ping`) are `Event="heartbeat"`.
 4xx/5xx return the same `*APIError` types as other calls.
 
-Logs, metrics, and stream methods require the corresponding Sandbox
-capability to be available.
+Metrics and stream methods require the corresponding Sandbox capability to
+be available.
 
 #### `Execute(ctx, sandboxID, command string, ExecuteParams) (*Execution, error)`
 
@@ -294,8 +290,6 @@ Same as `client.Sandboxes.SetTimeout`. Updates `ExpiresAt` and
 `ExpiryPinned` from the response.
 
 #### `sandbox.Refresh(ctx) error`
-
-#### `sandbox.Logs(ctx) (string, error)`
 
 #### `sandbox.Metrics(ctx, MetricsParams) (*MetricsBatch, error)`
 
