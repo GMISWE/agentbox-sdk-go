@@ -98,7 +98,7 @@ func main() {
 	}
 	_ = products
 	// Choose an instance_type returned above.
-	instanceType := "gmi.sandbox.x-small"
+	instanceType := "gmi.sandbox.small"
 
 	var agent *agentbox.Agent
 	var sandbox *agentbox.Sandbox

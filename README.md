@@ -70,7 +70,7 @@ func main() {
 	// Discover available IDCs and SKUs, then pass explicit values.
 	// The SDK does not pick IDC or instance_type for you.
 	idcID := "us-central-iowa2"
-	instanceType := "gmi.sandbox.x-small"
+	instanceType := "gmi.sandbox.small"
 
 	agent, err := client.Agents.Create(ctx, agentbox.AgentCreateParams{
 		Title:        "agentbox-demo",
