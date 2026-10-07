@@ -257,22 +257,6 @@ fmt.Println(download.Filename, download.Content)
 with `sandbox.GetExecution(ctx, execution.ID())`. File paths must be absolute
 and cannot contain `.` or `..` segments.
 
-## Interactive shell
-
-```go
-conn, err := sandbox.Shell(ctx)
-if err != nil {
-	log.Fatal(err)
-}
-defer conn.Close()
-
-conn.Send("echo hello\n")
-reply, err := conn.Recv()
-fmt.Println(reply)
-```
-
-The returned connection supports `Send`, `Recv`, and `Close`.
-
 ## List and filter sandboxes
 
 ```go
