@@ -117,6 +117,67 @@ func TestLaunchMetadataAndTimeout(t *testing.T) {
 	}
 }
 
+func TestSandboxResume(t *testing.T) {
+	var calls []struct {
+		method string
+		url    string
+		body   []byte
+	}
+	transport := func(_ context.Context, method, rawURL string, _ http.Header, body []byte) (*RawResponse, error) {
+		calls = append(calls, struct {
+			method string
+			url    string
+			body   []byte
+		}{method, rawURL, append([]byte(nil), body...)})
+		switch {
+		case method == http.MethodGet && hasSuffix(rawURL, "/tasks/task-1"):
+			return &RawResponse{StatusCode: http.StatusOK, Body: []byte(`{"id":"task-1","task_status":"paused","expiry_pinned":false}`)}, nil
+		case method == http.MethodPost && hasSuffix(rawURL, "/tasks/task-1/resume"):
+			if len(body) == 0 {
+				return &RawResponse{StatusCode: http.StatusAccepted, Body: []byte(`{"task_id":"task-1","state":"resuming","expiry_pinned":false}`)}, nil
+			}
+			return &RawResponse{StatusCode: http.StatusAccepted, Body: []byte(`{"task_id":"task-1","state":"resuming","expiry_pinned":true}`)}, nil
+		default:
+			t.Fatalf("unexpected %s %s", method, rawURL)
+			return nil, nil
+		}
+	}
+	client, err := NewClient(WithAPIKey("test-key"), WithBaseURL("https://example.test"), WithTransport(transport))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox, err := client.Sandboxes.Get(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sandbox.Resume(context.Background(), ResumeParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls[1].method != http.MethodPost || !hasSuffix(calls[1].url, "/tasks/task-1/resume") || len(calls[1].body) != 0 {
+		t.Fatalf("resume without timeout = %s %s body=%q", calls[1].method, calls[1].url, calls[1].body)
+	}
+	if sandbox.Status() != "resuming" || sandbox.ExpiryPinned() {
+		t.Fatalf("status=%q pinned=%v", sandbox.Status(), sandbox.ExpiryPinned())
+	}
+
+	timeoutSeconds := 3600
+	resumed, err := client.Sandboxes.Resume(context.Background(), "task-1", ResumeParams{TimeoutSeconds: &timeoutSeconds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(calls[2].body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["timeout_seconds"] != float64(3600) {
+		t.Fatalf("resume body = %#v", body)
+	}
+	if resumed.TaskID != "task-1" || resumed.State != "resuming" || !resumed.ExpiryPinned {
+		t.Fatalf("resume result = %+v", resumed)
+	}
+}
+
 func hasSuffix(rawURL, suffix string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {

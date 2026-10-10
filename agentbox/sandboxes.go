@@ -133,7 +133,8 @@ func (s *Sandbox) Capabilities() map[string]any {
 func (s *Sandbox) ExpiresAt() string { return stringField(s.Data, "expires_at") }
 
 // ExpiryPinned reports whether the caller chose the lifetime, at launch via
-// TimeoutSeconds or later via SetTimeout. A pinned sandbox is not auto-renewed.
+// TimeoutSeconds or later via SetTimeout or Resume. A pinned sandbox is not
+// auto-renewed.
 func (s *Sandbox) ExpiryPinned() bool {
 	v, _ := s.Data["expiry_pinned"].(bool)
 	return v
@@ -157,6 +158,29 @@ func (s *Sandbox) SetTimeout(ctx context.Context, timeoutSeconds int) error {
 		s.Data = map[string]any{}
 	}
 	s.Data["expires_at"] = updated.ExpiresAt
+	s.Data["expiry_pinned"] = updated.ExpiryPinned
+	return nil
+}
+
+// Resume wakes a paused sandbox. TimeoutSeconds nil keeps the run time that
+// was left at pause and leaves the expiry pin unchanged. A non-nil value must
+// be >= 60; it resets the run time and pins the expiry, the same as SetTimeout.
+//
+// Resume is accepted asynchronously. On success Status is the upstream state
+// at acceptance, usually "resuming". Poll with WaitUntilRunning. It is a cold
+// start: disk files return except /tmp, processes are not restored, and the
+// start command is not re-run.
+func (s *Sandbox) Resume(ctx context.Context, params ResumeParams) error {
+	updated, err := s.client.Sandboxes.Resume(ctx, s.ID(), params)
+	if err != nil {
+		return err
+	}
+	if s.Data == nil {
+		s.Data = map[string]any{}
+	}
+	if updated.State != "" {
+		s.Data["task_status"] = updated.State
+	}
 	s.Data["expiry_pinned"] = updated.ExpiryPinned
 	return nil
 }
@@ -362,6 +386,21 @@ type SandboxExpiry struct {
 	ExpiryPinned bool
 }
 
+// ResumeParams selects how a paused sandbox is resumed.
+// TimeoutSeconds nil keeps the run time left at pause. A non-nil value must
+// be >= 60 and resets that run time, pinning the expiry.
+type ResumeParams struct {
+	TimeoutSeconds *int
+}
+
+// SandboxResume is the acceptance result of Sandbox.Resume.
+// State is the upstream state at acceptance, usually "resuming".
+type SandboxResume struct {
+	TaskID       string
+	State        string
+	ExpiryPinned bool
+}
+
 // List returns a page of Sandboxes.
 func (sc *SandboxCollection) List(ctx context.Context, params SandboxListParams) (*Page[*Sandbox], error) {
 	page := params.Page
@@ -444,6 +483,34 @@ func (sc *SandboxCollection) SetTimeout(ctx context.Context, sandboxID string, t
 	return &SandboxExpiry{
 		TaskID:       payload.TaskID,
 		ExpiresAt:    payload.ExpiresAt,
+		ExpiryPinned: payload.ExpiryPinned,
+	}, nil
+}
+
+// Resume wakes a paused sandbox. See Sandbox.Resume.
+//
+// HTTP 202 means the resume was accepted. HTTP 400 invalid_timeout means
+// timeout_seconds is below 60 or above the account maximum. HTTP 409
+// task_not_running means the sandbox does not exist yet; task_not_paused
+// means it is not paused. HTTP 422 sandbox_only_operation means the task is
+// not a sandbox.
+func (sc *SandboxCollection) Resume(ctx context.Context, sandboxID string, params ResumeParams) (*SandboxResume, error) {
+	var body any
+	if params.TimeoutSeconds != nil {
+		body = map[string]any{"timeout_seconds": *params.TimeoutSeconds}
+	}
+	var payload struct {
+		TaskID       string `json:"task_id"`
+		State        string `json:"state"`
+		ExpiryPinned bool   `json:"expiry_pinned"`
+	}
+	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/resume", sandboxID), nil, body, nil, &payload)
+	if err != nil {
+		return nil, err
+	}
+	return &SandboxResume{
+		TaskID:       payload.TaskID,
+		State:        payload.State,
 		ExpiryPinned: payload.ExpiryPinned,
 	}, nil
 }

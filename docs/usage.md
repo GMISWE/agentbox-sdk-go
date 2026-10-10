@@ -233,6 +233,21 @@ page, err := client.Sandboxes.List(ctx, agentbox.SandboxListParams{
 extend the remaining lifetime, and it pins the sandbox so later reads do not
 auto-renew it.
 
+`Resume` wakes a paused sandbox. Omit `TimeoutSeconds` to keep the run time
+that was left at pause. Set it (>= 60) to reset that run time and pin the
+expiry. The call returns when the resume is accepted; `Status()` is usually
+`resuming`. Poll with `WaitUntilRunning`. Resume is a cold start: disk files
+come back except `/tmp`, processes are not restored, and the start command is
+not re-run.
+
+```go
+err = sandbox.Resume(ctx, agentbox.ResumeParams{})
+err = sandbox.WaitUntilRunning(ctx, agentbox.WaitUntilRunningParams{})
+
+timeoutSeconds := 3600
+err = sandbox.Resume(ctx, agentbox.ResumeParams{TimeoutSeconds: &timeoutSeconds})
+```
+
 ## Run commands and transfer files
 
 ```go
