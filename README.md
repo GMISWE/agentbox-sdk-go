@@ -115,6 +115,7 @@ func main() {
 label. Launch cannot change the Agent's IDC.
 
 `Sandboxes.List` omits `stopped` and `deleted` unless you pass `Status`.
+A paused sandbox is woken with `Sandbox.Resume`.
 
 Sandbox runtimes also support command execution and file upload/download. See
 the reference for `Sandbox.Execute`, `Sandbox.UploadFile`, and

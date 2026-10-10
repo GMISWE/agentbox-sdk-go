@@ -214,6 +214,25 @@ effective expiry.
 | 409 | `task_not_running` | Sandbox is not running or paused |
 | 422 | `sandbox_only_operation` | Task is not a sandbox |
 
+#### `Resume(ctx, sandboxID string, ResumeParams) (*SandboxResume, error)`
+
+Wakes a paused sandbox. `POST /tasks/{id}/resume`, HTTP 202. `TimeoutSeconds`
+nil omits the body and keeps the run time left at pause; the expiry pin is
+unchanged. A non-nil value must be >= 60. It resets the run time and pins the
+expiry, the same as `SetTimeout`.
+
+`SandboxResume.State` is the upstream state at acceptance, usually `resuming`.
+Resume is a cold start: disk files return except `/tmp`, processes are not
+restored, and the start command is not re-run. Poll `Get` or
+`sandbox.WaitUntilRunning` until `running`.
+
+| Status | Message | Meaning |
+|---|---|---|
+| 400 | `invalid_timeout` | `timeout_seconds` is under 60 or above the account maximum |
+| 409 | `task_not_running` | The sandbox does not exist yet |
+| 409 | `task_not_paused` | The sandbox is not paused |
+| 422 | `sandbox_only_operation` | Task is not a sandbox |
+
 #### `Get(ctx, sandboxID string) (*Sandbox, error)`
 
 #### `Delete(ctx, sandboxID string) error`
@@ -287,6 +306,11 @@ Represents a Sandbox.
 #### `sandbox.SetTimeout(ctx, timeoutSeconds int) error`
 
 Same as `client.Sandboxes.SetTimeout`. Updates `ExpiresAt` and
+`ExpiryPinned` from the response.
+
+#### `sandbox.Resume(ctx, ResumeParams) error`
+
+Same as `client.Sandboxes.Resume`. Sets `Status()` from `State` and updates
 `ExpiryPinned` from the response.
 
 #### `sandbox.Refresh(ctx) error`
@@ -463,7 +487,8 @@ Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
 Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams,
     AgentSandboxListParams
 TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams
-Sandbox, SandboxCollection, SandboxListParams, SandboxExpiry, ExecuteParams,
+Sandbox, SandboxCollection, SandboxListParams, SandboxExpiry, ResumeParams,
+    SandboxResume, ExecuteParams,
     WaitUntilRunningParams, MetricsParams, MetricsTimeseriesParams
 Execution, FileDownload, MetricSeries, MetricsBatch
 Idc, IdcCollection, Product, ProductCollection, ProductListParams
