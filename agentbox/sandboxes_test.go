@@ -178,6 +178,69 @@ func TestSandboxResume(t *testing.T) {
 	}
 }
 
+func TestSandboxPause(t *testing.T) {
+	var calls []struct {
+		method string
+		url    string
+		body   []byte
+	}
+	transport := func(_ context.Context, method, rawURL string, _ http.Header, body []byte) (*RawResponse, error) {
+		calls = append(calls, struct {
+			method string
+			url    string
+			body   []byte
+		}{method, rawURL, append([]byte(nil), body...)})
+		switch {
+		case method == http.MethodGet && hasSuffix(rawURL, "/tasks/task-1"):
+			if len(calls) == 1 {
+				return &RawResponse{StatusCode: http.StatusOK, Body: []byte(`{"id":"task-1","task_status":"running","sandbox":{"state":"running"}}`)}, nil
+			}
+			return &RawResponse{StatusCode: http.StatusOK, Body: []byte(`{"id":"task-1","task_status":"paused","sandbox":{"state":"paused","paused_at":"2026-10-14T02:00:00Z","paused_expire_at":"2026-10-21T02:00:00Z"}}`)}, nil
+		case method == http.MethodPost && hasSuffix(rawURL, "/tasks/task-1/pause"):
+			return &RawResponse{StatusCode: http.StatusAccepted, Body: []byte(`{"task_id":"task-1","state":"pausing"}`)}, nil
+		default:
+			t.Fatalf("unexpected %s %s", method, rawURL)
+			return nil, nil
+		}
+	}
+	client, err := NewClient(WithAPIKey("test-key"), WithBaseURL("https://example.test"), WithTransport(transport))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox, err := client.Sandboxes.Get(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandbox.PausedAt() != "" || sandbox.PausedExpireAt() != "" {
+		t.Fatalf("running sandbox paused_at=%q paused_expire_at=%q", sandbox.PausedAt(), sandbox.PausedExpireAt())
+	}
+	if err := sandbox.Pause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls[1].method != http.MethodPost || !hasSuffix(calls[1].url, "/tasks/task-1/pause") || len(calls[1].body) != 0 {
+		t.Fatalf("pause = %s %s body=%q", calls[1].method, calls[1].url, calls[1].body)
+	}
+	if sandbox.Status() != "pausing" {
+		t.Fatalf("status = %q", sandbox.Status())
+	}
+
+	if err := sandbox.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sandbox.Status() != "paused" || sandbox.PausedAt() != "2026-10-14T02:00:00Z" || sandbox.PausedExpireAt() != "2026-10-21T02:00:00Z" {
+		t.Fatalf("status=%q paused_at=%q paused_expire_at=%q", sandbox.Status(), sandbox.PausedAt(), sandbox.PausedExpireAt())
+	}
+
+	paused, err := client.Sandboxes.Pause(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paused.TaskID != "task-1" || paused.State != "pausing" {
+		t.Fatalf("pause result = %+v", paused)
+	}
+}
+
 func hasSuffix(rawURL, suffix string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {

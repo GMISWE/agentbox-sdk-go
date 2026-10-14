@@ -146,6 +146,21 @@ func (s *Sandbox) Metadata() map[string]string {
 	return stringMapField(s.Data, "metadata")
 }
 
+// PausedAt is when a paused sandbox's run time froze (RFC3339). Present only
+// while the sandbox is paused or resuming.
+func (s *Sandbox) PausedAt() string {
+	v, _ := s.Data["sandbox"].(map[string]any)
+	return stringField(v, "paused_at")
+}
+
+// PausedExpireAt is the deadline (RFC3339) after which a paused sandbox and
+// its disk are reclaimed unless it is resumed. Present only while the sandbox
+// is paused or resuming.
+func (s *Sandbox) PausedExpireAt() string {
+	v, _ := s.Data["sandbox"].(map[string]any)
+	return stringField(v, "paused_expire_at")
+}
+
 // SetTimeout resets this sandbox's lifetime to now + timeoutSeconds and pins
 // it. timeoutSeconds must be >= 60. Only a running or paused sandbox accepts
 // it. On success, ExpiresAt and ExpiryPinned are updated from the response.
@@ -159,6 +174,28 @@ func (s *Sandbox) SetTimeout(ctx context.Context, timeoutSeconds int) error {
 	}
 	s.Data["expires_at"] = updated.ExpiresAt
 	s.Data["expiry_pinned"] = updated.ExpiryPinned
+	return nil
+}
+
+// Pause pauses a running sandbox. It keeps disk files (except /tmp, which is
+// cleared on resume) but not memory or running processes, and stops consuming
+// run time. A paused sandbox that is not resumed by PausedExpireAt is
+// reclaimed together with its disk.
+//
+// Pause is accepted asynchronously. On success Status is the upstream state
+// at acceptance, usually "pausing". Poll with Refresh until Status is
+// "paused".
+func (s *Sandbox) Pause(ctx context.Context) error {
+	updated, err := s.client.Sandboxes.Pause(ctx, s.ID())
+	if err != nil {
+		return err
+	}
+	if s.Data == nil {
+		s.Data = map[string]any{}
+	}
+	if updated.State != "" {
+		s.Data["task_status"] = updated.State
+	}
 	return nil
 }
 
@@ -386,6 +423,13 @@ type SandboxExpiry struct {
 	ExpiryPinned bool
 }
 
+// SandboxPause is the acceptance result of Sandbox.Pause.
+// State is the upstream state at acceptance, usually "pausing".
+type SandboxPause struct {
+	TaskID string
+	State  string
+}
+
 // ResumeParams selects how a paused sandbox is resumed.
 // TimeoutSeconds nil keeps the run time left at pause. A non-nil value must
 // be >= 60 and resets that run time, pinning the expiry.
@@ -485,6 +529,24 @@ func (sc *SandboxCollection) SetTimeout(ctx context.Context, sandboxID string, t
 		ExpiresAt:    payload.ExpiresAt,
 		ExpiryPinned: payload.ExpiryPinned,
 	}, nil
+}
+
+// Pause pauses a running sandbox. See Sandbox.Pause.
+//
+// HTTP 202 means the pause was accepted. HTTP 400 means upstream rejected it
+// (message relayed). HTTP 409 task_not_running means the sandbox does not
+// exist yet or is not running. HTTP 422 sandbox_only_operation means the task
+// is not a sandbox.
+func (sc *SandboxCollection) Pause(ctx context.Context, sandboxID string) (*SandboxPause, error) {
+	var payload struct {
+		TaskID string `json:"task_id"`
+		State  string `json:"state"`
+	}
+	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/pause", sandboxID), nil, nil, nil, &payload)
+	if err != nil {
+		return nil, err
+	}
+	return &SandboxPause{TaskID: payload.TaskID, State: payload.State}, nil
 }
 
 // Resume wakes a paused sandbox. See Sandbox.Resume.

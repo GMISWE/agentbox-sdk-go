@@ -233,6 +233,24 @@ page, err := client.Sandboxes.List(ctx, agentbox.SandboxListParams{
 extend the remaining lifetime, and it pins the sandbox so later reads do not
 auto-renew it.
 
+`Pause` pauses a running sandbox. Disk files are kept (except `/tmp`, which
+is cleared on resume); memory and running processes are not. A paused sandbox
+stops consuming run time. The call returns when the pause is accepted;
+`Status()` is usually `pausing`. Poll with `Refresh` until it is `paused`.
+`PausedExpireAt()` is the deadline to resume before the sandbox and its disk
+are reclaimed.
+
+```go
+err = sandbox.Pause(ctx)
+for sandbox.Status() != "paused" {
+	time.Sleep(2 * time.Second)
+	if err := sandbox.Refresh(ctx); err != nil {
+		return err
+	}
+}
+fmt.Println(sandbox.PausedExpireAt())
+```
+
 `Resume` wakes a paused sandbox. Omit `TimeoutSeconds` to keep the run time
 that was left at pause. Set it (>= 60) to reset that run time and pin the
 expiry. The call returns when the resume is accepted; `Status()` is usually

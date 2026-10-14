@@ -214,6 +214,22 @@ effective expiry.
 | 409 | `task_not_running` | Sandbox is not running or paused |
 | 422 | `sandbox_only_operation` | Task is not a sandbox |
 
+#### `Pause(ctx, sandboxID string) (*SandboxPause, error)`
+
+Pauses a running sandbox. `POST /tasks/{id}/pause`, no body, HTTP 202. A
+pause keeps disk files (except `/tmp`, which is cleared on resume) but not
+memory or running processes, and stops consuming run time. A paused sandbox
+that is not resumed by `PausedExpireAt()` is reclaimed together with its disk.
+
+`SandboxPause.State` is the upstream state at acceptance, usually `pausing`.
+Poll `Get` or `sandbox.Refresh` until `Status()` is `paused`.
+
+| Status | Message | Meaning |
+|---|---|---|
+| 400 | upstream message | Rejected upstream |
+| 409 | `task_not_running` | The sandbox does not exist yet or is not running |
+| 422 | `sandbox_only_operation` | Task is not a sandbox |
+
 #### `Resume(ctx, sandboxID string, ResumeParams) (*SandboxResume, error)`
 
 Wakes a paused sandbox. `POST /tasks/{id}/resume`, HTTP 202. `TimeoutSeconds`
@@ -302,11 +318,17 @@ Represents a Sandbox.
 | `ExpiresAt()` | `string` | Sandbox expiry timestamp |
 | `ExpiryPinned()` | `bool` | Caller chose the expiry; no auto-renew |
 | `Metadata()` | `map[string]string` | Launch labels; nil when unset |
+| `PausedAt()` | `string` | When run time froze; only while paused or resuming |
+| `PausedExpireAt()` | `string` | Reclaim deadline for a paused sandbox; only while paused or resuming |
 
 #### `sandbox.SetTimeout(ctx, timeoutSeconds int) error`
 
 Same as `client.Sandboxes.SetTimeout`. Updates `ExpiresAt` and
 `ExpiryPinned` from the response.
+
+#### `sandbox.Pause(ctx) error`
+
+Same as `client.Sandboxes.Pause`. Sets `Status()` from `State`.
 
 #### `sandbox.Resume(ctx, ResumeParams) error`
 
@@ -487,8 +509,8 @@ Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
 Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams,
     AgentSandboxListParams
 TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams
-Sandbox, SandboxCollection, SandboxListParams, SandboxExpiry, ResumeParams,
-    SandboxResume, ExecuteParams,
+Sandbox, SandboxCollection, SandboxListParams, SandboxExpiry, SandboxPause,
+    ResumeParams, SandboxResume, ExecuteParams,
     WaitUntilRunningParams, MetricsParams, MetricsTimeseriesParams
 Execution, FileDownload, MetricSeries, MetricsBatch
 Idc, IdcCollection, Product, ProductCollection, ProductListParams
