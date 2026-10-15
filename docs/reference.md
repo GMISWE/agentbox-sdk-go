@@ -137,8 +137,23 @@ smaller value is HTTP 400 `invalid_timeout`. A non-zero value on a container
 deployment is HTTP 422 `sandbox_only_field`. Launch does not return the
 effective expiry — call `Refresh` and read `ExpiresAt`.
 
+`SnapshotID` launches from a ready snapshot of this Agent (see
+[Snapshots](#snapshots)) instead of its template, sandbox runtime only.
+Sizing is inherited from the snapshot, so `InstanceType` is ignored, and the
+IDC must be the snapshot's (a different one is HTTP 422).
+
+| Status | Message | Meaning |
+|---|---|---|
+| 404 | `snapshot_not_found` | Unknown, another Agent's, or deleted snapshot |
+| 409 | `snapshot_not_ready` | The snapshot is not `ready` yet |
+| 422 | `sandbox_only_operation` | `SnapshotID` on a container Agent |
+
 Launch returns immediately. Call `Refresh` or `WaitUntilRunning` for
 current state.
+
+#### `agent.ListSnapshots(ctx) ([]*Snapshot, error)`
+
+Same as `client.Agents.ListSnapshots(ctx, agent.Slug())`.
 
 #### `agent.Sandboxes(ctx, page, pageSize int) (*Page[*Sandbox], error)`
 
@@ -188,7 +203,8 @@ a build failure. GMI does not persist these logs.
 
 #### `Launch(ctx, slug string, LaunchParams) (*Sandbox, error)`
 
-Same body as `agent.Launch`. `LaunchParams.IdcName` is required here.
+Same body as `agent.Launch`. `LaunchParams.IdcName` is required here, unless
+`SnapshotID` is set; it then defaults to the snapshot's IDC.
 
 #### `List(ctx, SandboxListParams) (*Page[*Sandbox], error)`
 
@@ -212,6 +228,22 @@ effective expiry.
 |---|---|---|
 | 400 | `invalid_timeout` | Lifetime is under 60 seconds or above the account maximum |
 | 409 | `task_not_running` | Sandbox is not running or paused |
+| 422 | `sandbox_only_operation` | Task is not a sandbox |
+
+#### `Pause(ctx, sandboxID string) (*SandboxPause, error)`
+
+Pauses a running sandbox. `POST /tasks/{id}/pause`, no body, HTTP 202. A
+pause keeps disk files (except `/tmp`, which is cleared on resume) but not
+memory or running processes, and stops consuming run time. A paused sandbox
+that is not resumed by `PausedExpireAt()` is reclaimed together with its disk.
+
+`SandboxPause.State` is the upstream state at acceptance, usually `pausing`.
+Poll `Get` or `sandbox.Refresh` until `Status()` is `paused`.
+
+| Status | Message | Meaning |
+|---|---|---|
+| 400 | upstream message | Rejected upstream |
+| 409 | `task_not_running` | The sandbox does not exist yet or is not running |
 | 422 | `sandbox_only_operation` | Task is not a sandbox |
 
 #### `Resume(ctx, sandboxID string, ResumeParams) (*SandboxResume, error)`
@@ -302,16 +334,28 @@ Represents a Sandbox.
 | `ExpiresAt()` | `string` | Sandbox expiry timestamp |
 | `ExpiryPinned()` | `bool` | Caller chose the expiry; no auto-renew |
 | `Metadata()` | `map[string]string` | Launch labels; nil when unset |
+| `PausedAt()` | `string` | When run time froze; only while paused or resuming |
+| `PausedExpireAt()` | `string` | Reclaim deadline for a paused sandbox; only while paused or resuming |
+| `SourceSnapshotID()` | `string` | Snapshot it was launched from; empty when launched from the template |
 
 #### `sandbox.SetTimeout(ctx, timeoutSeconds int) error`
 
 Same as `client.Sandboxes.SetTimeout`. Updates `ExpiresAt` and
 `ExpiryPinned` from the response.
 
+#### `sandbox.Pause(ctx) error`
+
+Same as `client.Sandboxes.Pause`. Sets `Status()` from `State`.
+
 #### `sandbox.Resume(ctx, ResumeParams) error`
 
 Same as `client.Sandboxes.Resume`. Sets `Status()` from `State` and updates
 `ExpiryPinned` from the response.
+
+#### `sandbox.CreateSnapshot(ctx, CreateSnapshotParams) (*Snapshot, error)`
+
+Same as `client.Sandboxes.CreateSnapshot`. The returned snapshot carries
+`AgentSlug()` from the sandbox, so `Refresh` and `WaitUntilReady` work on it.
 
 #### `sandbox.Refresh(ctx) error`
 
@@ -353,6 +397,108 @@ Polls until `Status() == "running"`. Defaults: `Timeout: DefaultWaitTimeout`,
 
 `SandboxFailed.Status` is the sandbox status; `SandboxFailed.Message` is
 `LastError()` when set.
+
+## Snapshots
+
+A snapshot is a durable copy of a running sandbox. New sandboxes of the same
+Agent launch from a `ready` snapshot with `LaunchParams.SnapshotID`. The
+sandbox's `Capabilities()["snapshots"]` reports whether it supports them.
+
+Status values: `creating`, `ready`, `error`, `deleting`, `delete_failed`.
+
+Create, rename and delete need the caller to be the creator (of the sandbox
+or the snapshot) or an org owner; otherwise HTTP 403. Every org member can
+list.
+
+#### `client.Sandboxes.CreateSnapshot(ctx, sandboxID string, CreateSnapshotParams) (*Snapshot, error)`
+
+`POST /tasks/{id}/snapshots`, HTTP 201. Only a running sandbox can be saved.
+`CreateSnapshotParams.Name` empty omits the body; the API then names it
+`<sandbox display name or id>-<UTC yyyymmdd-hhmmss>`. A non-empty name is at
+most 255 characters. The snapshot starts `creating`. This form does not know
+the Agent slug, so `AgentSlug()` is empty; use `sandbox.CreateSnapshot` or
+`client.Agents.ListSnapshots` to poll it.
+
+| Status | Message | Meaning |
+|---|---|---|
+| 400 | `invalid_name` | Name over 255 characters |
+| 400 | `invalid_request` | Rejected upstream |
+| 409 | `task_not_running` | The sandbox does not exist yet |
+| 409 | `snapshot_conflict` | Upstream refused, e.g. the sandbox is not running |
+| 422 | `sandbox_only_operation` | Task is not a sandbox |
+
+#### `client.Agents.ListSnapshots(ctx, slug string) ([]*Snapshot, error)`
+
+`GET /deployments/{slug}/snapshots`, newest first. Status and sizing are read
+live from upstream. A snapshot that finished deleting is not listed. HTTP 422
+`sandbox_only_operation` means the Agent is not a sandbox runtime.
+
+#### `client.Snapshots.Rename(ctx, snapshotID, name string) (*Snapshot, error)`
+
+`PATCH /snapshots/{id}`. `name` is 1..255 characters. Only a `ready` or
+`error` snapshot can be renamed.
+
+| Status | Message | Meaning |
+|---|---|---|
+| 400 | `invalid_name` | Empty, over 255 characters, or rejected upstream |
+| 409 | `snapshot_not_settled` | Still `creating` or being deleted |
+
+#### `client.Snapshots.Delete(ctx, snapshotID string) (*SnapshotDeletion, error)`
+
+`DELETE /snapshots/{id}`, HTTP 202. `SnapshotDeletion.Status` is usually
+`deleting`. The snapshot shows `deleting` in `ListSnapshots` until upstream
+finishes, then disappears, or shows `delete_failed` (call `Delete` again to
+retry). No new sandbox can launch from it once deletion is accepted.
+
+| Status | Message | Meaning |
+|---|---|---|
+| 400 | `invalid_request` | Rejected upstream |
+| 409 | `snapshot_conflict` | Upstream refused, e.g. a dependency |
+
+### `Snapshot`
+
+| Method | Type | Notes |
+|---|---|---|
+| `ID()` | `string` | Snapshot ID |
+| `Name()` | `string` | |
+| `Status()` | `string` | `creating`, `ready`, `error`, `deleting`, `delete_failed` |
+| `StatusReason()` | `string` | Why it is `error` or `delete_failed` |
+| `FailureCode()` | `string` | Upstream failure code |
+| `AgentID()` | `string` | Owning Agent ID |
+| `AgentSlug()` | `string` | Owning Agent slug when known; needed by `Refresh` |
+| `SourceSandboxID()` | `string` | Sandbox it was saved from |
+| `IdcName()` | `string` | Data center; sandboxes launched from it run here |
+| `ProductName()` | `string` | Sizing product, e.g. `SMALL` |
+| `VCPU()` / `RAMMB()` / `DiskSizeMB()` | `int` | Sizing inherited at launch |
+| `Architecture()` | `string` | e.g. `x86_64` |
+| `CreatedBy()` / `CreatedAt()` / `ReadyAt()` | `string` | |
+
+#### `snapshot.Refresh(ctx) error`
+
+Reloads from `ListSnapshots(AgentSlug())`. Errors when `AgentSlug()` is
+empty. When the snapshot is no longer listed (it finished deleting), returns
+an `*APIError` for which `IsNotFoundError` is true.
+
+#### `snapshot.WaitUntilReady(ctx, WaitUntilReadyParams) error`
+
+Polls until `Status() == "ready"`. Defaults: `Timeout: DefaultWaitTimeout`,
+`PollInterval: 2 * time.Second`.
+
+| Outcome | Result |
+|---|---|
+| `ready` | returns `nil` |
+| `error`, `deleting`, `delete_failed` | returns `*SnapshotFailed` |
+| timeout | returns `*SnapshotWaitTimeout` |
+
+`SnapshotFailed.Message` is `StatusReason()` when set.
+
+#### `snapshot.Rename(ctx, name string) error`
+
+Same as `client.Snapshots.Rename`. Replaces `Data` with the response.
+
+#### `snapshot.Delete(ctx) error`
+
+Same as `client.Snapshots.Delete`. Sets `Status()` from the response.
 
 ## Catalog
 
@@ -447,7 +593,8 @@ type Page[T any] struct {
 ## Errors
 
 All SDK errors are ordinary Go `error` values; use `errors.As` to unwrap
-`*APIError`, `*SandboxFailed`, `*SandboxWaitTimeout`, or `*TransportError`.
+`*APIError`, `*SandboxFailed`, `*SandboxWaitTimeout`, `*SnapshotFailed`,
+`*SnapshotWaitTimeout`, or `*TransportError`.
 
 | Type | When |
 |---|---|
@@ -455,6 +602,8 @@ All SDK errors are ordinary Go `error` values; use `errors.As` to unwrap
 | `*APIError` | The server rejected a request; `Kind` distinguishes the variant below |
 | `*SandboxFailed` | Wait hit a terminal non-running status |
 | `*SandboxWaitTimeout` | Wait exceeded `Timeout` |
+| `*SnapshotFailed` | `WaitUntilReady` hit `error`, `deleting` or `delete_failed` |
+| `*SnapshotWaitTimeout` | `WaitUntilReady` exceeded `Timeout` |
 
 `APIError.Kind` values and matching helpers:
 
@@ -487,13 +636,16 @@ Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
 Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams,
     AgentSandboxListParams
 TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams
-Sandbox, SandboxCollection, SandboxListParams, SandboxExpiry, ResumeParams,
-    SandboxResume, ExecuteParams,
+Sandbox, SandboxCollection, SandboxListParams, SandboxExpiry, SandboxPause,
+    ResumeParams, SandboxResume, ExecuteParams,
     WaitUntilRunningParams, MetricsParams, MetricsTimeseriesParams
+Snapshot, SnapshotCollection, CreateSnapshotParams, SnapshotDeletion,
+    WaitUntilReadyParams
 Execution, FileDownload, MetricSeries, MetricsBatch
 Idc, IdcCollection, Product, ProductCollection, ProductListParams
 Eligibility, Page[T]
 StreamEvent, Stream
-TransportError, SandboxFailed, SandboxWaitTimeout
+TransportError, SandboxFailed, SandboxWaitTimeout, SnapshotFailed,
+    SnapshotWaitTimeout
 APIError, ErrorKind (+ ErrorKind* constants), Is*Error helpers
 ```

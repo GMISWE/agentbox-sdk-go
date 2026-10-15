@@ -26,6 +26,23 @@ type SandboxFailed struct {
 
 func (e *SandboxFailed) Error() string { return e.Message }
 
+// SnapshotWaitTimeout means Snapshot.WaitUntilReady exceeded its timeout
+// before the snapshot reached the ready status.
+type SnapshotWaitTimeout struct {
+	Message string
+}
+
+func (e *SnapshotWaitTimeout) Error() string { return e.Message }
+
+// SnapshotFailed means the snapshot reached error, deleting or delete_failed
+// while Snapshot.WaitUntilReady was polling.
+type SnapshotFailed struct {
+	Status  string
+	Message string
+}
+
+func (e *SnapshotFailed) Error() string { return e.Message }
+
 // ErrorKind identifies which HTTP-status-derived APIError variant occurred.
 type ErrorKind string
 

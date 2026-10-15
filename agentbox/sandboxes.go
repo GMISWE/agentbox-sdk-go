@@ -146,6 +146,25 @@ func (s *Sandbox) Metadata() map[string]string {
 	return stringMapField(s.Data, "metadata")
 }
 
+// SourceSnapshotID is the snapshot this Sandbox was launched from, or "" when
+// it was launched from the Agent's template.
+func (s *Sandbox) SourceSnapshotID() string { return stringField(s.Data, "source_snapshot_id") }
+
+// PausedAt is when a paused sandbox's run time froze (RFC3339). Present only
+// while the sandbox is paused or resuming.
+func (s *Sandbox) PausedAt() string {
+	v, _ := s.Data["sandbox"].(map[string]any)
+	return stringField(v, "paused_at")
+}
+
+// PausedExpireAt is the deadline (RFC3339) after which a paused sandbox and
+// its disk are reclaimed unless it is resumed. Present only while the sandbox
+// is paused or resuming.
+func (s *Sandbox) PausedExpireAt() string {
+	v, _ := s.Data["sandbox"].(map[string]any)
+	return stringField(v, "paused_expire_at")
+}
+
 // SetTimeout resets this sandbox's lifetime to now + timeoutSeconds and pins
 // it. timeoutSeconds must be >= 60. Only a running or paused sandbox accepts
 // it. On success, ExpiresAt and ExpiryPinned are updated from the response.
@@ -159,6 +178,28 @@ func (s *Sandbox) SetTimeout(ctx context.Context, timeoutSeconds int) error {
 	}
 	s.Data["expires_at"] = updated.ExpiresAt
 	s.Data["expiry_pinned"] = updated.ExpiryPinned
+	return nil
+}
+
+// Pause pauses a running sandbox. It keeps disk files (except /tmp, which is
+// cleared on resume) but not memory or running processes, and stops consuming
+// run time. A paused sandbox that is not resumed by PausedExpireAt is
+// reclaimed together with its disk.
+//
+// Pause is accepted asynchronously. On success Status is the upstream state
+// at acceptance, usually "pausing". Poll with Refresh until Status is
+// "paused".
+func (s *Sandbox) Pause(ctx context.Context) error {
+	updated, err := s.client.Sandboxes.Pause(ctx, s.ID())
+	if err != nil {
+		return err
+	}
+	if s.Data == nil {
+		s.Data = map[string]any{}
+	}
+	if updated.State != "" {
+		s.Data["task_status"] = updated.State
+	}
 	return nil
 }
 
@@ -318,12 +359,12 @@ type SandboxCollection struct {
 }
 
 func (sc *SandboxCollection) launch(ctx context.Context, slug string, params LaunchParams, idcName, templateID string) (*Sandbox, error) {
-	if idcName == "" {
+	if idcName == "" && params.SnapshotID == "" {
 		return nil, errors.New("agentbox: idc_name is required; pass the agent's Idc field (an idcId, not a region name)")
 	}
 
 	body := compact(map[string]any{
-		"idc_name":         idcName,
+		"idc_name":         nonEmptyString(idcName),
 		"instance_type":    params.InstanceType,
 		"env":              envOrNil(params.Env),
 		"display_name":     nonEmptyString(params.DisplayName),
@@ -333,6 +374,7 @@ func (sc *SandboxCollection) launch(ctx context.Context, slug string, params Lau
 		"template_id":      nonEmptyString(templateID),
 		"metadata":         metadataOrNil(params.Metadata),
 		"timeout_seconds":  timeoutSecondsOrNil(params.TimeoutSeconds),
+		"snapshot_id":      nonEmptyString(params.SnapshotID),
 	})
 
 	var payload struct {
@@ -359,11 +401,15 @@ func (sc *SandboxCollection) launch(ctx context.Context, slug string, params Lau
 	if timeoutSecondsOrNil(params.TimeoutSeconds) != nil {
 		data["expiry_pinned"] = true
 	}
+	if params.SnapshotID != "" {
+		data["source_snapshot_id"] = params.SnapshotID
+	}
 	return &Sandbox{client: sc.client, Data: data}, nil
 }
 
-// Launch starts a Sandbox from an Agent slug. Unlike Agent.Launch, idcName
-// is required here.
+// Launch starts a Sandbox from an Agent slug. Unlike Agent.Launch, IdcName
+// is required here, unless SnapshotID is set (it then defaults to the
+// snapshot's IDC).
 func (sc *SandboxCollection) Launch(ctx context.Context, slug string, params LaunchParams) (*Sandbox, error) {
 	return sc.launch(ctx, slug, params, params.IdcName, "")
 }
@@ -384,6 +430,13 @@ type SandboxExpiry struct {
 	TaskID       string
 	ExpiresAt    string
 	ExpiryPinned bool
+}
+
+// SandboxPause is the acceptance result of Sandbox.Pause.
+// State is the upstream state at acceptance, usually "pausing".
+type SandboxPause struct {
+	TaskID string
+	State  string
 }
 
 // ResumeParams selects how a paused sandbox is resumed.
@@ -485,6 +538,24 @@ func (sc *SandboxCollection) SetTimeout(ctx context.Context, sandboxID string, t
 		ExpiresAt:    payload.ExpiresAt,
 		ExpiryPinned: payload.ExpiryPinned,
 	}, nil
+}
+
+// Pause pauses a running sandbox. See Sandbox.Pause.
+//
+// HTTP 202 means the pause was accepted. HTTP 400 means upstream rejected it
+// (message relayed). HTTP 409 task_not_running means the sandbox does not
+// exist yet or is not running. HTTP 422 sandbox_only_operation means the task
+// is not a sandbox.
+func (sc *SandboxCollection) Pause(ctx context.Context, sandboxID string) (*SandboxPause, error) {
+	var payload struct {
+		TaskID string `json:"task_id"`
+		State  string `json:"state"`
+	}
+	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/pause", sandboxID), nil, nil, nil, &payload)
+	if err != nil {
+		return nil, err
+	}
+	return &SandboxPause{TaskID: payload.TaskID, State: payload.State}, nil
 }
 
 // Resume wakes a paused sandbox. See Sandbox.Resume.

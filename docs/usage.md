@@ -233,6 +233,24 @@ page, err := client.Sandboxes.List(ctx, agentbox.SandboxListParams{
 extend the remaining lifetime, and it pins the sandbox so later reads do not
 auto-renew it.
 
+`Pause` pauses a running sandbox. Disk files are kept (except `/tmp`, which
+is cleared on resume); memory and running processes are not. A paused sandbox
+stops consuming run time. The call returns when the pause is accepted;
+`Status()` is usually `pausing`. Poll with `Refresh` until it is `paused`.
+`PausedExpireAt()` is the deadline to resume before the sandbox and its disk
+are reclaimed.
+
+```go
+err = sandbox.Pause(ctx)
+for sandbox.Status() != "paused" {
+	time.Sleep(2 * time.Second)
+	if err := sandbox.Refresh(ctx); err != nil {
+		return err
+	}
+}
+fmt.Println(sandbox.PausedExpireAt())
+```
+
 `Resume` wakes a paused sandbox. Omit `TimeoutSeconds` to keep the run time
 that was left at pause. Set it (>= 60) to reset that run time and pin the
 expiry. The call returns when the resume is accepted; `Status()` is usually
@@ -247,6 +265,31 @@ err = sandbox.WaitUntilRunning(ctx, agentbox.WaitUntilRunningParams{})
 timeoutSeconds := 3600
 err = sandbox.Resume(ctx, agentbox.ResumeParams{TimeoutSeconds: &timeoutSeconds})
 ```
+
+## Snapshots
+
+A snapshot saves a running sandbox so new sandboxes of the same Agent can
+start from it. Creation is asynchronous: the snapshot starts `creating`; wait
+for `ready`. Launching from a snapshot inherits its sizing and IDC, so
+`InstanceType` is ignored.
+
+```go
+snapshot, err := sandbox.CreateSnapshot(ctx, agentbox.CreateSnapshotParams{Name: "base"})
+err = snapshot.WaitUntilReady(ctx, agentbox.WaitUntilReadyParams{Timeout: 10 * time.Minute})
+
+clone, err := agent.Launch(ctx, agentbox.LaunchParams{SnapshotID: snapshot.ID()})
+err = clone.WaitUntilRunning(ctx, agentbox.WaitUntilRunningParams{})
+
+snapshots, err := agent.ListSnapshots(ctx) // newest first
+err = snapshot.Rename(ctx, "base-v2")      // only when ready or error
+err = snapshot.Delete(ctx)                 // async; status becomes deleting
+```
+
+`WaitUntilReady` returns `*agentbox.SnapshotFailed` if the status becomes
+`error`, `deleting` or `delete_failed`, and `*agentbox.SnapshotWaitTimeout`
+if the timeout elapses first. A snapshot from
+`client.Sandboxes.CreateSnapshot` does not know its Agent; poll it with
+`client.Agents.ListSnapshots` instead.
 
 ## Run commands and transfer files
 
