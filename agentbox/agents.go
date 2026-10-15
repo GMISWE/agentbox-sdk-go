@@ -106,6 +106,14 @@ type LaunchParams struct {
 	// rejected with HTTP 422 (sandbox_only_field). Launch does not return
 	// expires_at; call Refresh to read it.
 	TimeoutSeconds *int
+	// SnapshotID launches from a ready snapshot of this Agent
+	// (Agent.ListSnapshots) instead of its template, sandbox runtime only.
+	// Sizing is inherited from the snapshot, so InstanceType is ignored, and
+	// the IDC must be the snapshot's; with SandboxCollection.Launch, IdcName
+	// may be left empty to use it. HTTP 404 snapshot_not_found means it is
+	// unknown, another Agent's or deleted; HTTP 409 snapshot_not_ready means it
+	// is not ready yet.
+	SnapshotID string
 }
 
 // Launch starts a Sandbox from this Agent. IdcName defaults to the Agent's

@@ -55,6 +55,7 @@ type Client struct {
 	Sandboxes *SandboxCollection
 	Idcs      *IdcCollection
 	Products  *ProductCollection
+	Snapshots *SnapshotCollection
 }
 
 // Option configures a Client.
@@ -150,6 +151,7 @@ func NewClient(opts ...Option) (*Client, error) {
 	c.Sandboxes = &SandboxCollection{client: c}
 	c.Idcs = &IdcCollection{client: c}
 	c.Products = &ProductCollection{client: c}
+	c.Snapshots = &SnapshotCollection{client: c}
 
 	return c, nil
 }

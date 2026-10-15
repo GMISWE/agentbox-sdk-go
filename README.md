@@ -116,6 +116,8 @@ label. Launch cannot change the Agent's IDC.
 
 `Sandboxes.List` omits `stopped` and `deleted` unless you pass `Status`.
 `Sandbox.Pause` pauses a running sandbox; `Sandbox.Resume` wakes it.
+`Sandbox.CreateSnapshot` saves a running sandbox; launch from it with
+`LaunchParams.SnapshotID`.
 
 Sandbox runtimes also support command execution and file upload/download. See
 the reference for `Sandbox.Execute`, `Sandbox.UploadFile`, and

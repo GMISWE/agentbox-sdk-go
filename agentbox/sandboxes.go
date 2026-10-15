@@ -146,6 +146,10 @@ func (s *Sandbox) Metadata() map[string]string {
 	return stringMapField(s.Data, "metadata")
 }
 
+// SourceSnapshotID is the snapshot this Sandbox was launched from, or "" when
+// it was launched from the Agent's template.
+func (s *Sandbox) SourceSnapshotID() string { return stringField(s.Data, "source_snapshot_id") }
+
 // PausedAt is when a paused sandbox's run time froze (RFC3339). Present only
 // while the sandbox is paused or resuming.
 func (s *Sandbox) PausedAt() string {
@@ -355,12 +359,12 @@ type SandboxCollection struct {
 }
 
 func (sc *SandboxCollection) launch(ctx context.Context, slug string, params LaunchParams, idcName, templateID string) (*Sandbox, error) {
-	if idcName == "" {
+	if idcName == "" && params.SnapshotID == "" {
 		return nil, errors.New("agentbox: idc_name is required; pass the agent's Idc field (an idcId, not a region name)")
 	}
 
 	body := compact(map[string]any{
-		"idc_name":         idcName,
+		"idc_name":         nonEmptyString(idcName),
 		"instance_type":    params.InstanceType,
 		"env":              envOrNil(params.Env),
 		"display_name":     nonEmptyString(params.DisplayName),
@@ -370,6 +374,7 @@ func (sc *SandboxCollection) launch(ctx context.Context, slug string, params Lau
 		"template_id":      nonEmptyString(templateID),
 		"metadata":         metadataOrNil(params.Metadata),
 		"timeout_seconds":  timeoutSecondsOrNil(params.TimeoutSeconds),
+		"snapshot_id":      nonEmptyString(params.SnapshotID),
 	})
 
 	var payload struct {
@@ -396,11 +401,15 @@ func (sc *SandboxCollection) launch(ctx context.Context, slug string, params Lau
 	if timeoutSecondsOrNil(params.TimeoutSeconds) != nil {
 		data["expiry_pinned"] = true
 	}
+	if params.SnapshotID != "" {
+		data["source_snapshot_id"] = params.SnapshotID
+	}
 	return &Sandbox{client: sc.client, Data: data}, nil
 }
 
-// Launch starts a Sandbox from an Agent slug. Unlike Agent.Launch, idcName
-// is required here.
+// Launch starts a Sandbox from an Agent slug. Unlike Agent.Launch, IdcName
+// is required here, unless SnapshotID is set (it then defaults to the
+// snapshot's IDC).
 func (sc *SandboxCollection) Launch(ctx context.Context, slug string, params LaunchParams) (*Sandbox, error) {
 	return sc.launch(ctx, slug, params, params.IdcName, "")
 }

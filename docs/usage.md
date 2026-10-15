@@ -266,6 +266,31 @@ timeoutSeconds := 3600
 err = sandbox.Resume(ctx, agentbox.ResumeParams{TimeoutSeconds: &timeoutSeconds})
 ```
 
+## Snapshots
+
+A snapshot saves a running sandbox so new sandboxes of the same Agent can
+start from it. Creation is asynchronous: the snapshot starts `creating`; wait
+for `ready`. Launching from a snapshot inherits its sizing and IDC, so
+`InstanceType` is ignored.
+
+```go
+snapshot, err := sandbox.CreateSnapshot(ctx, agentbox.CreateSnapshotParams{Name: "base"})
+err = snapshot.WaitUntilReady(ctx, agentbox.WaitUntilReadyParams{Timeout: 10 * time.Minute})
+
+clone, err := agent.Launch(ctx, agentbox.LaunchParams{SnapshotID: snapshot.ID()})
+err = clone.WaitUntilRunning(ctx, agentbox.WaitUntilRunningParams{})
+
+snapshots, err := agent.ListSnapshots(ctx) // newest first
+err = snapshot.Rename(ctx, "base-v2")      // only when ready or error
+err = snapshot.Delete(ctx)                 // async; status becomes deleting
+```
+
+`WaitUntilReady` returns `*agentbox.SnapshotFailed` if the status becomes
+`error`, `deleting` or `delete_failed`, and `*agentbox.SnapshotWaitTimeout`
+if the timeout elapses first. A snapshot from
+`client.Sandboxes.CreateSnapshot` does not know its Agent; poll it with
+`client.Agents.ListSnapshots` instead.
+
 ## Run commands and transfer files
 
 ```go
