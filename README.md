@@ -7,6 +7,7 @@ container). Registering an Agent does not start anything.
 
 - [Usage](docs/usage.md) — install, auth, register, launch, wait, cleanup
 - [Reference](docs/reference.md) — client, methods, models, errors
+- [Examples](examples) — runnable programs for common workflows
 
 ## Install
 
