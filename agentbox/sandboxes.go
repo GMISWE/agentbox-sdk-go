@@ -635,7 +635,7 @@ func (sc *SandboxCollection) Stream(ctx context.Context, sandboxID string) (*Str
 // ExecuteParams configures SandboxCollection.Execute.
 type ExecuteParams struct {
 	Wait               *bool // defaults to true
-	WaitTimeoutSeconds *int  // ignored when Wait is false
+	WaitTimeoutSeconds *int  // values from 1 through 25; ignored when Wait is false
 }
 
 // Execute runs a command in a Sandbox. A completed command returns

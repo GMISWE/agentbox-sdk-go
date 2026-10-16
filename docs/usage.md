@@ -312,8 +312,9 @@ fmt.Println(download.Filename, download.Content)
 ```
 
 `Wait: &wait` (false) returns an accepted execution; retrieve its latest state
-with `sandbox.GetExecution(ctx, execution.ID())`. File paths must be absolute
-and cannot contain `.` or `..` segments.
+with `sandbox.GetExecution(ctx, execution.ID())`. `WaitTimeoutSeconds` accepts
+values from 1 through 25 and is ignored when `Wait` is false. File paths must
+be absolute and cannot contain `.` or `..` segments.
 
 ## List and filter sandboxes
 

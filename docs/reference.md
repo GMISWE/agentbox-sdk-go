@@ -294,7 +294,8 @@ be available.
 #### `Execute(ctx, sandboxID, command string, ExecuteParams) (*Execution, error)`
 
 Runs a command in a Sandbox. A completed command returns `Accepted=false`; an
-accepted asynchronous command returns `Accepted=true`.
+accepted asynchronous command returns `Accepted=true`. `WaitTimeoutSeconds`
+accepts values from 1 through 25 and is ignored when `Wait` is false.
 
 #### `GetExecution(ctx, sandboxID, executionID string) (*Execution, error)`
 
@@ -369,7 +370,8 @@ Same as `client.Sandboxes.CreateSnapshot`. The returned snapshot carries
 
 Runs a command. `Execution.Accepted` is true when execution continues
 asynchronously; use `GetExecution` to poll it, or `CancelExecution` to
-request cancellation. `WaitTimeoutSeconds` is ignored when `Wait` is false.
+request cancellation. `WaitTimeoutSeconds` accepts values from 1 through 25
+and is ignored when `Wait` is false.
 
 #### `sandbox.GetExecution(ctx, executionID string) (*Execution, error)`
 
