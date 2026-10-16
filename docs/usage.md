@@ -91,7 +91,7 @@ func main() {
 	}
 	_ = idcs
 	// Choose an idc_id returned above. This is the production example value.
-	idcID := "us-central-iowa2"
+	idcID := "us-central-iowa16"
 	products, err := client.Products.List(ctx, agentbox.ProductListParams{IdcName: idcID, Runtime: "sandbox"})
 	if err != nil {
 		panic(err)
