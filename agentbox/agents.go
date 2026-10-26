@@ -43,8 +43,10 @@ func (a *Agent) Env() []any { return sliceField(a.Data, "env") }
 // Revision is the Agent's revision number.
 func (a *Agent) Revision() int { return intField(a.Data, "revision") }
 
-// GeneratedAPIKey is the plaintext MaaS key. Only Create returns it; GET and
-// PATCH never do, so Refresh and Update keep the in-memory value.
+// GeneratedAPIKey is the plaintext MaaS key. Only Create can return it, and
+// only when it generates one: an Agent without GMI_MODELS gets none (seen for
+// both sandbox and container runtimes). GET and PATCH never return it, so
+// Refresh and Update keep the in-memory value.
 func (a *Agent) GeneratedAPIKey() string { return stringField(a.Data, "generated_api_key") }
 
 // Launchable reports whether the Agent can be launched.
@@ -91,8 +93,9 @@ func (a *Agent) Update(ctx context.Context, fields AgentUpdateFields) error {
 	return nil
 }
 
-// Delete deletes the Agent. It does not stop or delete remaining sandboxes
-// of that Agent.
+// Delete deletes the Agent. It returns HTTP 409 (IsConflictError) while the
+// Agent still has sandboxes, and can keep returning 409 for a few seconds
+// after the last one is deleted; delete the sandboxes first and retry.
 func (a *Agent) Delete(ctx context.Context) error {
 	return a.client.Agents.Delete(ctx, a.Slug())
 }
@@ -295,8 +298,9 @@ func (a *AgentCollection) Update(ctx context.Context, slug string, fields AgentU
 	return &Agent{client: a.client, Data: payload}, nil
 }
 
-// Delete deletes an Agent by slug. It does not stop or delete remaining
-// sandboxes of that Agent.
+// Delete deletes an Agent by slug. It returns HTTP 409 (IsConflictError)
+// while the Agent still has sandboxes, and can keep returning 409 for a few
+// seconds after the last one is deleted; delete the sandboxes first and retry.
 func (a *AgentCollection) Delete(ctx context.Context, slug string) error {
 	return a.client.request(ctx, http.MethodDelete, fmt.Sprintf("/deployments/%s", slug), nil, nil, nil, nil)
 }

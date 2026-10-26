@@ -101,7 +101,10 @@ the API accepts; locked fields return `422`.
 
 #### `Delete(ctx, slug string) error`
 
-Does not stop or delete running sandboxes of that Agent.
+Returns HTTP 409 (`IsConflictError`, for example `sandbox_template_in_use`)
+while the Agent still has sandboxes; it never stops or deletes them. Delete the
+sandboxes first. Right after the last one is deleted the service can still
+return 409 for a few seconds, so retry on `IsConflictError`.
 
 ### `Agent`
 
@@ -119,10 +122,12 @@ Represents an Agent.
 | `TemplateBuildError()` | `string` | Sandbox image-build error |
 | `Env()` | `[]any` | Copy of `env` |
 | `Revision()` | `int` | |
-| `GeneratedAPIKey()` | `string` | Plaintext MaaS key. Only `Create` returns it; see below |
+| `GeneratedAPIKey()` | `string` | Plaintext MaaS key. Only `Create` can return it; see below |
 | `Launchable()` | `bool` | Whether the Agent can be launched |
 
-`GET` and `PATCH` never return `generated_api_key`, so agents from
+`Create` returns `generated_api_key` only when it generates a MaaS key; an
+Agent created without `GMI_MODELS` gets none (empty), as seen for both the
+sandbox and container runtimes. `GET` and `PATCH` never return it, so agents from
 `client.Agents.Get` / `client.Agents.Update` have none. Store the key when you
 create the Agent. `agent.Refresh` and `agent.Update` keep the in-memory value
 (a non-empty new value would win).
@@ -136,6 +141,10 @@ Reloads the Agent in place.
 Same as `client.Agents.Update(ctx, agent.Slug(), fields)`, applied in place.
 
 #### `agent.Delete(ctx) error`
+
+Same as `client.Agents.Delete(ctx, agent.Slug())`: HTTP 409 (`IsConflictError`)
+while the Agent still has sandboxes. Delete them first; right after the last
+one is deleted it can still return 409 for a few seconds, so retry.
 
 #### `agent.Launch(ctx, LaunchParams) (*Sandbox, error)`
 
@@ -412,7 +421,7 @@ Represents a Sandbox.
 |---|---|---|
 | `ID()` | `string` | Sandbox ID |
 | `Status()` | `string` | Current lifecycle status |
-| `EndpointURL()` | `string` | Empty until running (and can still be empty after) |
+| `EndpointURL()` | `string` | Empty until running; on the sandbox runtime it holds the data-plane URL once running |
 | `AgentID()` | `string` | Owning Agent ID |
 | `AgentSlug()` | `string` | Owning Agent slug |
 | `DisplayName()` | `string` | |

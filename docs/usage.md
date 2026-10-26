@@ -172,7 +172,7 @@ agent, err := client.Agents.Create(ctx, agentbox.AgentCreateParams{
 fmt.Println(agent.Slug(), agent.Launchable())
 ```
 
-- `agent.GeneratedAPIKey()` is returned only by create. `client.Agents.Get` and `Update` results do not carry it, so store it now. `agent.Refresh` and `agent.Update` keep the in-memory value.
+- `agent.GeneratedAPIKey()` is returned only by create, and only when create generates a MaaS key: an Agent without `GMI_MODELS` gets none (empty) on both the sandbox and container runtimes. `client.Agents.Get` and `Update` results do not carry it, so store it now. `agent.Refresh` and `agent.Update` keep the in-memory value.
 - `agent.Launchable()` is false when the upstream template is missing.
 
 Later:
@@ -203,8 +203,8 @@ A new sandbox starts as `pending`. `WaitUntilRunning` polls until `running`. It 
 - `*agentbox.SandboxFailed` if status is `error`, `deleted`, `stopped`, or `stopping`
 - `*agentbox.SandboxWaitTimeout` if the timeout elapses first
 
-`EndpointURL()` is empty until the sandbox is running, and can still be empty
-after `running`. Do not assume an HTTP URL is always present.
+`EndpointURL()` is empty until the sandbox is running. On the sandbox runtime it
+holds the data-plane URL once the sandbox is `running`.
 
 ## Metadata and expiry
 
@@ -401,8 +401,13 @@ Pass `Status` when you need those.
 
 ```go
 sandbox.Delete(ctx) // one-way; the sandbox cannot be restarted
-agent.Delete(ctx)   // does not stop or delete remaining sandboxes
+agent.Delete(ctx)   // returns 409 while the Agent still has sandboxes; delete them first
 ```
+
+`agent.Delete` returns HTTP 409 (`agentbox.IsConflictError`) while the Agent
+still has sandboxes, and can keep returning it for a few seconds right after
+the last one is deleted. Retry on `IsConflictError`, as
+`examples/internal/exampleutil.DeleteAgent` does.
 
 Always delete sandboxes you launched in tests. They bill the Console account.
 
