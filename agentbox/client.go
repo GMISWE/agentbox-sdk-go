@@ -131,17 +131,24 @@ func NewClient(opts ...Option) (*Client, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("agentbox: GMI_AGENTBOX_API_KEY is required (or use WithAPIKey)")
 	}
+	if strings.ContainsAny(c.APIKey, "\r\n") {
+		return nil, fmt.Errorf("agentbox: API key must not contain line breaks")
+	}
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
 	c.serviceURL = c.BaseURL
 
 	if c.httpClient == nil {
-		c.httpClient = &http.Client{Timeout: c.timeout}
+		c.httpClient = &http.Client{Timeout: c.timeout, CheckRedirect: checkRedirect}
+	} else {
+		c.httpClient = withRedirectPolicy(c.httpClient)
 	}
 	if c.transport == nil {
 		c.transport = defaultTransport(c.httpClient)
 	}
 	if c.streamTransport == nil {
-		c.streamTransport = defaultStreamTransport(&http.Client{})
+		// The stream client never carries the request Timeout (it would cut
+		// long-lived streams), and has never been derived from WithHTTPClient.
+		c.streamTransport = defaultStreamTransport(&http.Client{CheckRedirect: checkRedirect})
 	}
 	if c.shellDialer == nil {
 		c.shellDialer = defaultShellDialer
@@ -250,12 +257,8 @@ func (c *Client) requestRaw(ctx context.Context, method, path string, params map
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode >= 400 {
-		payload := jsonLoads(resp.Body)
-		if payload != nil {
-			return nil, errorFromResponse(resp.StatusCode, payload)
-		}
-		return nil, errorFromResponse(resp.StatusCode, string(resp.Body))
+	if resp.StatusCode >= 300 {
+		return nil, errorFromBody(resp.StatusCode, resp.Body)
 	}
 	return resp, nil
 }
@@ -283,7 +286,7 @@ func (c *Client) stream(ctx context.Context, path string) (*Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	if raw.StatusCode >= 400 {
+	if raw.StatusCode >= 300 {
 		defer func() {
 			_ = raw.Close()
 		}()
@@ -291,11 +294,7 @@ func (c *Client) stream(ctx context.Context, path string) (*Stream, error) {
 		for raw.Lines.Scan() {
 			body = append(body, raw.Lines.Bytes()...)
 		}
-		payload := jsonLoads(body)
-		if payload != nil {
-			return nil, errorFromResponse(raw.StatusCode, payload)
-		}
-		return nil, errorFromResponse(raw.StatusCode, string(body))
+		return nil, errorFromBody(raw.StatusCode, body)
 	}
 	return &Stream{raw: raw}, nil
 }

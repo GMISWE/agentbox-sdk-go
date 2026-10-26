@@ -43,8 +43,8 @@ func (a *Agent) Env() []any { return sliceField(a.Data, "env") }
 // Revision is the Agent's revision number.
 func (a *Agent) Revision() int { return intField(a.Data, "revision") }
 
-// GeneratedAPIKey is the plaintext MaaS key, present only on Create (and
-// rare patch retries).
+// GeneratedAPIKey is the plaintext MaaS key. Only Create returns it; GET and
+// PATCH never do, so Refresh and Update keep the in-memory value.
 func (a *Agent) GeneratedAPIKey() string { return stringField(a.Data, "generated_api_key") }
 
 // Launchable reports whether the Agent can be launched.
@@ -59,8 +59,21 @@ func (a *Agent) Refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	a.Data = updated.Data
+	a.replaceData(updated.Data)
 	return nil
+}
+
+// replaceData swaps in a fresh payload but keeps the previously known
+// generated_api_key: GET and PATCH never return it, only Create does.
+func (a *Agent) replaceData(data map[string]any) {
+	old := a.GeneratedAPIKey()
+	if key, _ := data["generated_api_key"].(string); key == "" && old != "" {
+		if data == nil {
+			data = map[string]any{}
+		}
+		data["generated_api_key"] = old
+	}
+	a.Data = data
 }
 
 // AgentUpdateFields is a PATCH passthrough for Agent.Update /
@@ -74,7 +87,7 @@ func (a *Agent) Update(ctx context.Context, fields AgentUpdateFields) error {
 	if err != nil {
 		return err
 	}
-	a.Data = updated.Data
+	a.replaceData(updated.Data)
 	return nil
 }
 

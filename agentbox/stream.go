@@ -64,7 +64,7 @@ func (s *Stream) Next() (StreamEvent, bool) {
 	}
 
 	if err := s.raw.Lines.Err(); err != nil {
-		s.err = err
+		s.err = newTransportError(err)
 	}
 	return StreamEvent{}, false
 }

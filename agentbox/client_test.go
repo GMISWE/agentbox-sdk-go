@@ -2,6 +2,7 @@ package agentbox
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,5 +55,16 @@ func TestDefaultAPIRoot(t *testing.T) {
 	}
 	if parsed.Path != "/api/v1/ie/container/deployments" {
 		t.Fatalf("tot url = %s", got)
+	}
+}
+
+func TestErrorHelpersUnwrapWrappedAPIError(t *testing.T) {
+	apiErr := errorFromResponse(507, map[string]any{"error": "full"})
+	wrapped := fmt.Errorf("x: %w", apiErr)
+	if !IsServerError(wrapped) || !IsInsufficientStorageError(wrapped) {
+		t.Fatal("wrapped 507 APIError not detected")
+	}
+	if IsNotFoundError(wrapped) {
+		t.Fatal("unexpected match")
 	}
 }

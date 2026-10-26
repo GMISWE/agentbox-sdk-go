@@ -2,6 +2,7 @@ package agentbox
 
 import (
 	"context"
+	"io"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -42,9 +43,14 @@ func (w *wsShellConn) Close() error {
 
 func defaultShellDialer(ctx context.Context, wsURL string, headers http.Header) (ShellConn, error) {
 	dialer := *websocket.DefaultDialer
-	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
+	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
-		return nil, &TransportError{Message: err.Error()}
+		if resp != nil {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+			_ = resp.Body.Close()
+			return nil, errorFromBody(resp.StatusCode, body)
+		}
+		return nil, newTransportError(err)
 	}
 	return &wsShellConn{conn: conn}, nil
 }

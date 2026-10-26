@@ -4,9 +4,58 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 )
+
+// maxRedirects is the maximum number of redirects the SDK follows.
+const maxRedirects = 5
+
+// checkRedirect is the SDK redirect policy: at most maxRedirects hops, only
+// http/https targets, and Authorization/Cookie are dropped when the origin
+// (scheme, host, port) changes from the original request.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > maxRedirects {
+		return fmt.Errorf("agentbox: stopped after %d redirects", maxRedirects)
+	}
+	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+		return fmt.Errorf("agentbox: unsupported redirect scheme %q", req.URL.Scheme)
+	}
+	if originOf(req.URL) != originOf(via[0].URL) {
+		req.Header.Del("Authorization")
+		req.Header.Del("Cookie")
+	}
+	return nil
+}
+
+// originOf returns scheme://host:port with the default port made explicit.
+func originOf(u *url.URL) string {
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	if port == "" {
+		if scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return scheme + "://" + strings.ToLower(u.Hostname()) + ":" + port
+}
+
+// withRedirectPolicy returns hc with the SDK redirect policy applied. A client
+// that already sets CheckRedirect is returned as is; otherwise a shallow copy
+// is returned so the caller's client is never mutated.
+func withRedirectPolicy(hc *http.Client) *http.Client {
+	if hc.CheckRedirect != nil {
+		return hc
+	}
+	cp := *hc
+	cp.CheckRedirect = checkRedirect
+	return &cp
+}
 
 // RawResponse is a transport-level HTTP response.
 type RawResponse struct {
@@ -46,13 +95,13 @@ func defaultTransport(httpClient *http.Client) Transport {
 		}
 		req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 		if err != nil {
-			return nil, &TransportError{Message: err.Error()}
+			return nil, newTransportError(err)
 		}
 		req.Header = headers.Clone()
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			return nil, &TransportError{Message: err.Error()}
+			return nil, newTransportError(err)
 		}
 		defer func() {
 			_ = resp.Body.Close()
@@ -60,7 +109,7 @@ func defaultTransport(httpClient *http.Client) Transport {
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, &TransportError{Message: err.Error()}
+			return nil, newTransportError(err)
 		}
 
 		return &RawResponse{
@@ -79,13 +128,13 @@ func defaultStreamTransport(httpClient *http.Client) StreamTransport {
 		}
 		req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 		if err != nil {
-			return nil, &TransportError{Message: err.Error()}
+			return nil, newTransportError(err)
 		}
 		req.Header = headers.Clone()
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			return nil, &TransportError{Message: err.Error()}
+			return nil, newTransportError(err)
 		}
 
 		scanner := bufio.NewScanner(resp.Body)
