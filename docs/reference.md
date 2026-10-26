@@ -360,13 +360,47 @@ connect failure returns `*TransportError`.
 
 ```go
 type ShellConn interface {
-	Send(message string) error // write a text message
-	Recv() (string, error)     // read the next text message
+	Send(message string) error             // write a raw text frame (ignored by the service)
+	Recv() (string, error)                 // read the next text frame, undecoded
+	SendInput(data string) error           // {"type":"stdin","data":data}
+	Resize(cols, rows int) error           // {"type":"resize","cols":cols,"rows":rows}
+	RecvMessage() (ShellMessage, error)    // Recv + JSON decode
 	Close() error
+}
+
+type ShellMessage struct {
+	Type    string // "status", "stdout", "error", or any other JSON type
+	Data    string // stdout: raw TTY output
+	Message string // status ("connected"/"closed") and error text
 }
 
 type ShellDialer func(ctx context.Context, wsURL string, headers http.Header) (ShellConn, error)
 ```
+
+Frames are TEXT with a JSON envelope. The service silently ignores raw text,
+binary frames and unknown types, so use `SendInput` and `Resize` for input;
+`Send` exists for custom frames.
+
+- `SendInput(data)` types `data` into the shell; end a command with `"\n"`.
+- `Resize(cols, rows)` returns an error without sending when `cols` or `rows`
+  is not positive.
+- `RecvMessage()` reads one frame and decodes it. `status` carries `Message`
+  `connected` or `closed`; `stdout` carries `Data` (raw terminal output with
+  input echo and `\r\n`, stderr merged); `error` carries `Message`. A frame
+  that is not JSON yields `Type == ""` and `Data` set to the raw text.
+
+The shell runs as root with bash (`HOME=/root`). Reconnecting resumes the same
+session. Only one connection is active: a second attach receives `connected`
+then an `error` message. Running `exit` closes the shell, and later attaches
+are closed immediately, so call `Close` instead. See
+[usage.md](usage.md#shell).
+
+A `ShellConn` allows one concurrent writer (`Send`, `SendInput`, `Resize`) and
+one concurrent reader (`Recv`, `RecvMessage`); `Close` may be called from any
+goroutine to unblock a pending read.
+
+Custom `ShellConn` implementations (via `WithShellDialer`) must implement the
+three methods added alongside `Send`/`Recv`/`Close`.
 
 `WithShellDialer` replaces the dialer (testing hook).
 
@@ -714,7 +748,7 @@ DefaultBaseURL, DefaultWaitTimeout, Version
 Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
     WithTransport, WithStreamTransport, WithShellDialer, WithSleep
 Transport, StreamTransport, RawResponse, RawStream
-ShellConn, ShellDialer
+ShellConn, ShellMessage, ShellDialer
 Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams,
     AgentSandboxListParams
 TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams

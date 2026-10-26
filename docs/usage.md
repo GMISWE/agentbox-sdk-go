@@ -325,14 +325,64 @@ conn, err := sandbox.Shell(ctx)
 if err != nil {
 	return err
 }
-defer conn.Close()
-err = conn.Send("ls\n")
-out, err := conn.Recv()
+defer conn.Close() // close the connection; do not run `exit`
+
+// First message is {"type":"status","message":"connected"}.
+msg, err := conn.RecvMessage()
+
+err = conn.Resize(120, 32)            // terminal size, optional
+err = conn.SendInput("cd /tmp && pwd\n") // end a command with a newline
+for {
+	msg, err = conn.RecvMessage()
+	if err != nil {
+		return err
+	}
+	if msg.Type == "stdout" {
+		fmt.Print(msg.Data)
+		break
+	}
+}
 ```
+
+See [examples/shell](../examples/shell) for a complete program.
 
 The shell is a WebSocket to `/tasks/{id}/shell`; redirects are not followed. A
 handshake HTTP error is an `*APIError` (401 is `IsAuthenticationError`); other
 connect failures are a `*TransportError`.
+
+### Protocol
+
+Messages are TEXT frames carrying JSON. Send them with `SendInput` and
+`Resize`; raw text (`conn.Send`), binary frames and unknown types are silently
+ignored by the service. `RecvMessage` decodes what the service sends:
+
+| `Type` | Fields | Meaning |
+| --- | --- | --- |
+| `status` | `Message` | `connected` (first message) or `closed` (the shell ended) |
+| `stdout` | `Data` | Raw terminal output |
+| `error` | `Message` | A problem, for example a second concurrent attach |
+
+Other types pass through unchanged. A text frame that is not JSON yields
+`Type == ""` with `Data` set to the raw text. `Recv` returns the frame
+undecoded.
+
+### Session behaviour
+
+- The shell runs as root with bash and `HOME=/root`.
+- Output is raw terminal output: it contains the echo of your input, `\r\n`
+  line endings and control characters, and stderr is merged into stdout. Use
+  `Execute` when you need clean output and exit codes.
+- Disconnecting and reconnecting resumes the same session; the working
+  directory and exported variables are kept.
+- At most one connection is active. A second concurrent attach completes the
+  handshake, receives `connected` and then an `error` message, and gets no
+  output; the first connection is unaffected.
+- Running `exit` makes the service send status `closed` and close the socket.
+  Later attaches to that sandbox are closed immediately (`connected`, then
+  `closed`). Close the connection instead of running `exit`.
+- Latency is not guaranteed; do not depend on timing.
+- A connection supports one writer goroutine and one reader goroutine at a
+  time; do not call `SendInput`, `Resize` or `Send` concurrently.
 
 ## List and filter sandboxes
 
