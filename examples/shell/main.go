@@ -89,7 +89,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := waitForStatus(conn, "connected"); err != nil {
 		return err
 	}

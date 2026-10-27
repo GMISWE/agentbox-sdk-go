@@ -230,7 +230,7 @@ func TestStreamRedirectDropsAuthorizationAcrossPorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if v := leaked.Load(); v != "" {
 		t.Fatalf("Authorization forwarded by stream: %q", v)
 	}
@@ -273,7 +273,7 @@ func TestStreamReadFailureIsTransportError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if _, ok := s.Next(); ok {
 		t.Fatal("expected no event")
 	}

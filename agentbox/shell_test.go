@@ -92,7 +92,7 @@ func newShellServer(t *testing.T, greeting ...string) *shellServer {
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		_ = c.WriteMessage(websocket.TextMessage, []byte(`{"type":"status","message":"connected"}`))
 		for _, g := range greeting {
 			_ = c.WriteMessage(websocket.TextMessage, []byte(g))
