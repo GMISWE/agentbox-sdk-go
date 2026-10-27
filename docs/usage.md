@@ -23,7 +23,8 @@ export GMI_AGENTBOX_API_KEY="your-api-key"
 
 `GMI_AGENTBOX_API_KEY` is required when constructing `agentbox.NewClient()`
 with no `WithAPIKey` option. The key is whitespace-trimmed; a key containing
-a line break is rejected by `NewClient`.
+control characters (anything below 0x20 except tab, or DEL)
+is rejected by `NewClient`.
 
 Or pass it explicitly:
 
@@ -328,12 +329,12 @@ if err != nil {
 defer conn.Close() // close the connection; do not run `exit`
 
 // First message is {"type":"status","message":"connected"}.
-msg, err := conn.RecvMessage()
+msg, err := agentbox.RecvShellMessage(conn)
 
-err = conn.Resize(120, 32)            // terminal size, optional
-err = conn.SendInput("cd /tmp && pwd\n") // end a command with a newline
+err = agentbox.ResizeShell(conn, 120, 32) // terminal size, optional
+err = agentbox.SendShellInput(conn, "cd /tmp && pwd\n") // end a command with a newline
 for {
-	msg, err = conn.RecvMessage()
+	msg, err = agentbox.RecvShellMessage(conn)
 	if err != nil {
 		return err
 	}
@@ -347,14 +348,16 @@ for {
 See [examples/shell](../examples/shell) for a complete program.
 
 The shell is a WebSocket to `/tasks/{id}/shell`; redirects are not followed. A
-handshake HTTP error is an `*APIError` (401 is `IsAuthenticationError`); other
-connect failures are a `*TransportError`.
+handshake HTTP error (status 300 or above) is an `*APIError` (401 is
+`IsAuthenticationError`); other connect failures, including a bad handshake
+answered with 101 or 2xx, are a `*TransportError`.
 
 ### Protocol
 
-Messages are TEXT frames carrying JSON. Send them with `SendInput` and
-`Resize`; raw text (`conn.Send`), binary frames and unknown types are silently
-ignored by the service. `RecvMessage` decodes what the service sends:
+Messages are TEXT frames carrying JSON. Send them with `SendShellInput` and
+`ResizeShell`; raw text (`conn.Send`), binary frames and unknown types are
+silently ignored by the service. `RecvShellMessage` decodes what the service
+sends (`DecodeShellMessage` does the same for a frame you already hold):
 
 | `Type` | Fields | Meaning |
 | --- | --- | --- |
@@ -382,7 +385,7 @@ undecoded.
   `closed`). Close the connection instead of running `exit`.
 - Latency is not guaranteed; do not depend on timing.
 - A connection supports one writer goroutine and one reader goroutine at a
-  time; do not call `SendInput`, `Resize` or `Send` concurrently.
+  time; do not call `SendShellInput`, `ResizeShell` or `Send` concurrently.
 
 ## List and filter sandboxes
 
@@ -558,5 +561,8 @@ mismatch). `410` is `ErrorKindGone` (template build logs reclaimed). `501`
 is `ErrorKindNotSupported` (template build APIs on a container Agent).
 `413`, `415`, `416` and `499` have their own kinds, and `507` is a server
 error with `IsInsufficientStorageError`. Connection, URL, redirect and
-stream-read failures are `*TransportError`. The SDK never retries. See
+stream-read failures are `*TransportError` (context cancellation and an
+oversize stream line are returned as is). A 3xx response that the HTTP client
+did not follow is an `*APIError` (its `Location` is not exposed), also with a
+custom `WithTransport`. The SDK never retries. See
 [Reference](reference.md).

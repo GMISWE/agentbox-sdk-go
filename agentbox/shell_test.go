@@ -63,6 +63,93 @@ func TestShellHandshake503PlainBodyIsServerError(t *testing.T) {
 	}
 }
 
+func TestShellHandshake101BadAcceptIsTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Upgrade", "websocket")
+		w.Header().Set("Connection", "Upgrade")
+		w.Header().Set("Sec-WebSocket-Accept", "bogus")
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	defer srv.Close()
+
+	_, err := defaultShellDialer(context.Background(), wsURL(srv), http.Header{})
+	var te *TransportError
+	if !errors.As(err, &te) || !errors.Is(err, websocket.ErrBadHandshake) {
+		t.Fatalf("err = %#v", err)
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		t.Fatalf("unexpected APIError: %#v", apiErr)
+	}
+}
+
+func TestShellHandshake200IsTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html>proxy</html>"))
+	}))
+	defer srv.Close()
+
+	_, err := defaultShellDialer(context.Background(), wsURL(srv), http.Header{})
+	var te *TransportError
+	if !errors.As(err, &te) || !errors.Is(err, websocket.ErrBadHandshake) {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+// minimalConn implements only Send/Recv/Close.
+type minimalConn struct {
+	sent []string
+	recv []string
+}
+
+func (m *minimalConn) Send(s string) error { m.sent = append(m.sent, s); return nil }
+func (m *minimalConn) Recv() (string, error) {
+	if len(m.recv) == 0 {
+		return "", errors.New("eof")
+	}
+	s := m.recv[0]
+	m.recv = m.recv[1:]
+	return s, nil
+}
+func (m *minimalConn) Close() error { return nil }
+
+func TestShellHelpersWorkWithAnyShellConn(t *testing.T) {
+	var conn ShellConn = &minimalConn{recv: []string{`{"type":"stdout","data":"x"}`, "plain"}}
+	if err := SendShellInput(conn, "ls\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResizeShell(conn, 100, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResizeShell(conn, 0, 30); err == nil {
+		t.Fatal("zero cols accepted")
+	}
+	mc := conn.(*minimalConn)
+	if len(mc.sent) != 2 || mc.sent[0] != `{"type":"stdin","data":"ls\n"}` || mc.sent[1] != `{"type":"resize","cols":100,"rows":30}` {
+		t.Fatalf("sent = %q", mc.sent)
+	}
+	if m, err := RecvShellMessage(conn); err != nil || m.Type != "stdout" || m.Data != "x" {
+		t.Fatalf("m = %#v, err = %v", m, err)
+	}
+	if m, err := RecvShellMessage(conn); err != nil || m.Type != "" || m.Data != "plain" {
+		t.Fatalf("m = %#v, err = %v", m, err)
+	}
+	if _, err := RecvShellMessage(conn); err == nil {
+		t.Fatal("expected recv error")
+	}
+}
+
+func TestDecodeShellMessage(t *testing.T) {
+	if m := DecodeShellMessage(`{"type":"status","message":"connected"}`); m.Type != "status" || m.Message != "connected" {
+		t.Fatalf("m = %#v", m)
+	}
+	for _, raw := range []string{"null", "[1]", `{"data":"x"}`, "text"} {
+		if m := DecodeShellMessage(raw); m.Type != "" || m.Data != raw {
+			t.Fatalf("raw %q: m = %#v", raw, m)
+		}
+	}
+}
+
 func TestShellConnectionRefusedIsTransportError(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	addr := wsURL(srv)
@@ -140,7 +227,7 @@ func dialShell(t *testing.T, ss *shellServer) ShellConn {
 
 func TestShellRecvMessageConnectedStatus(t *testing.T) {
 	conn := dialShell(t, newShellServer(t))
-	m, err := conn.RecvMessage()
+	m, err := RecvShellMessage(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,13 +238,13 @@ func TestShellRecvMessageConnectedStatus(t *testing.T) {
 
 func TestShellSendInputRoundTrip(t *testing.T) {
 	conn := dialShell(t, newShellServer(t))
-	if _, err := conn.RecvMessage(); err != nil {
+	if _, err := RecvShellMessage(conn); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.SendInput("echo \"hi\"\n"); err != nil {
+	if err := SendShellInput(conn, "echo \"hi\"\n"); err != nil {
 		t.Fatal(err)
 	}
-	m, err := conn.RecvMessage()
+	m, err := RecvShellMessage(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,14 +256,14 @@ func TestShellSendInputRoundTrip(t *testing.T) {
 func TestShellResizeSendsExactEnvelope(t *testing.T) {
 	ss := newShellServer(t)
 	conn := dialShell(t, ss)
-	if _, err := conn.RecvMessage(); err != nil {
+	if _, err := RecvShellMessage(conn); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.Resize(120, 32); err != nil {
+	if err := ResizeShell(conn, 120, 32); err != nil {
 		t.Fatal(err)
 	}
 	// The server acknowledges after recording, so the record is visible.
-	if m, err := conn.RecvMessage(); err != nil || m.Message != "resized" {
+	if m, err := RecvShellMessage(conn); err != nil || m.Message != "resized" {
 		t.Fatalf("m = %#v, err = %v", m, err)
 	}
 	ss.mu.Lock()
@@ -194,16 +281,16 @@ func TestShellResizeRejectsNonPositive(t *testing.T) {
 	ss := newShellServer(t)
 	conn := dialShell(t, ss)
 	for _, sz := range [][2]int{{0, 24}, {80, 0}, {-1, 24}, {80, -5}} {
-		if err := conn.Resize(sz[0], sz[1]); err == nil {
+		if err := ResizeShell(conn, sz[0], sz[1]); err == nil {
 			t.Fatalf("Resize(%d, %d) succeeded", sz[0], sz[1])
 		}
 	}
 	// Nothing was sent: a valid message still works and the server saw no resize.
-	if err := conn.SendInput("x"); err != nil {
+	if err := SendShellInput(conn, "x"); err != nil {
 		t.Fatal(err)
 	}
 	for {
-		m, err := conn.RecvMessage()
+		m, err := RecvShellMessage(conn)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -220,10 +307,10 @@ func TestShellResizeRejectsNonPositive(t *testing.T) {
 
 func TestShellRecvMessageNonJSONFrame(t *testing.T) {
 	conn := dialShell(t, newShellServer(t, "plain text\r\n"))
-	if _, err := conn.RecvMessage(); err != nil {
+	if _, err := RecvShellMessage(conn); err != nil {
 		t.Fatal(err)
 	}
-	m, err := conn.RecvMessage()
+	m, err := RecvShellMessage(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,11 +321,11 @@ func TestShellRecvMessageNonJSONFrame(t *testing.T) {
 
 func TestShellRecvMessageErrorAndUnknownType(t *testing.T) {
 	conn := dialShell(t, newShellServer(t, `{"type":"error","message":"already attached"}`, `{"type":"future","data":"d"}`))
-	_, _ = conn.RecvMessage()
-	if m, _ := conn.RecvMessage(); m.Type != "error" || m.Message != "already attached" {
+	_, _ = RecvShellMessage(conn)
+	if m, _ := RecvShellMessage(conn); m.Type != "error" || m.Message != "already attached" {
 		t.Fatalf("m = %#v", m)
 	}
-	if m, _ := conn.RecvMessage(); m.Type != "future" || m.Data != "d" {
+	if m, _ := RecvShellMessage(conn); m.Type != "future" || m.Data != "d" {
 		t.Fatalf("m = %#v", m)
 	}
 }
@@ -250,11 +337,11 @@ func TestShellSendWritesRawText(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Flush ordering: a later resize is acknowledged after the raw frame was read.
-	if err := conn.Resize(80, 24); err != nil {
+	if err := ResizeShell(conn, 80, 24); err != nil {
 		t.Fatal(err)
 	}
 	for {
-		m, err := conn.RecvMessage()
+		m, err := RecvShellMessage(conn)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -271,9 +358,9 @@ func TestShellSendWritesRawText(t *testing.T) {
 
 func TestShellRecvMessageNonObjectFramesKeepRawText(t *testing.T) {
 	conn := dialShell(t, newShellServer(t, "null", "[1,2]", `{"data":"no type"}`))
-	_, _ = conn.RecvMessage()
+	_, _ = RecvShellMessage(conn)
 	for _, want := range []string{"null", "[1,2]", `{"data":"no type"}`} {
-		m, err := conn.RecvMessage()
+		m, err := RecvShellMessage(conn)
 		if err != nil {
 			t.Fatal(err)
 		}

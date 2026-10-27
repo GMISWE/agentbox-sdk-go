@@ -1,7 +1,7 @@
 // Command shell opens an interactive shell in a sandbox over WebSocket.
 //
-// The shell speaks JSON text frames: SendInput types into the shell, Resize
-// sets the terminal size, RecvMessage returns status, stdout and error
+// The shell speaks JSON text frames: SendShellInput types into the shell, ResizeShell
+// sets the terminal size, RecvShellMessage returns status, stdout and error
 // messages. Output is raw terminal output (input echo, "\r\n", stderr merged);
 // use Execute when you need clean output and exit codes.
 //
@@ -66,15 +66,15 @@ func run(ctx context.Context) error {
 		_ = conn.Close()
 		return err
 	}
-	if err := conn.Resize(120, 32); err != nil {
+	if err := agentbox.ResizeShell(conn, 120, 32); err != nil {
 		_ = conn.Close()
 		return err
 	}
-	if err := conn.SendInput("cd /tmp && pwd\n"); err != nil {
+	if err := agentbox.SendShellInput(conn, "cd /tmp && echo FIRST:$(pwd)\n"); err != nil {
 		_ = conn.Close()
 		return err
 	}
-	out, err := readUntil(conn, "\n/tmp", 30*time.Second)
+	out, err := readUntil(conn, "FIRST:/tmp", 30*time.Second)
 	// Close the connection rather than running `exit`: after `exit` the
 	// service closes the shell and later attaches to this sandbox are closed
 	// immediately.
@@ -93,10 +93,10 @@ func run(ctx context.Context) error {
 	if err := waitForStatus(conn, "connected"); err != nil {
 		return err
 	}
-	if err := conn.SendInput("pwd\n"); err != nil {
+	if err := agentbox.SendShellInput(conn, "echo RESUMED:$(pwd)\n"); err != nil {
 		return err
 	}
-	out, err = readUntil(conn, "\n/tmp", 30*time.Second)
+	out, err = readUntil(conn, "RESUMED:/tmp", 30*time.Second)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func run(ctx context.Context) error {
 // waitForStatus reads messages until a status message with the given text.
 func waitForStatus(conn agentbox.ShellConn, want string) error {
 	for {
-		m, err := conn.RecvMessage()
+		m, err := agentbox.RecvShellMessage(conn)
 		if err != nil {
 			return err
 		}
@@ -121,8 +121,9 @@ func waitForStatus(conn agentbox.ShellConn, want string) error {
 }
 
 // readUntil collects stdout until it contains marker, or fails after timeout.
-// The marker starts with a newline so the echo of the typed command ("cd
-// /tmp && pwd") does not match; only the printed directory does.
+// The marker is the printed form (for example "RESUMED:/tmp"). The echo of the
+// typed command contains "RESUMED:$(pwd)" literally, so neither echoed input
+// nor replayed scrollback from an earlier command can match it.
 func readUntil(conn agentbox.ShellConn, marker string, timeout time.Duration) (string, error) {
 	type result struct {
 		out string
@@ -132,7 +133,7 @@ func readUntil(conn agentbox.ShellConn, marker string, timeout time.Duration) (s
 	go func() {
 		var buf strings.Builder
 		for {
-			m, err := conn.RecvMessage()
+			m, err := agentbox.RecvShellMessage(conn)
 			if err != nil {
 				done <- result{buf.String(), err}
 				return

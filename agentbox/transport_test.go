@@ -236,17 +236,49 @@ func TestStreamRedirectDropsAuthorizationAcrossPorts(t *testing.T) {
 	}
 }
 
-func TestCallerHTTPClientWithCheckRedirectUntouched(t *testing.T) {
-	called := false
-	custom := func(*http.Request, []*http.Request) error { called = true; return http.ErrUseLastResponse }
-	hc := &http.Client{CheckRedirect: custom}
-	c := newTestClient(t, "https://example.test", WithHTTPClient(hc))
-	if c.httpClient != hc {
-		t.Fatal("caller client with CheckRedirect must be used as is")
+func TestCallerCheckRedirectWrappedAndStripsAuthorization(t *testing.T) {
+	var leaked atomic.Value
+	leaked.Store("")
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked.Store(r.Header.Get("Authorization"))
+	}))
+	defer other.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/x", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	var calls atomic.Int32
+	hc := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		calls.Add(1)
+		return nil
+	}}
+	c := newTestClient(t, origin.URL, WithHTTPClient(hc))
+	if _, err := c.requestRaw(context.Background(), "GET", "/start", nil, nil, nil); err != nil {
+		t.Fatal(err)
 	}
-	_ = c.httpClient.CheckRedirect(nil, nil)
-	if !called {
-		t.Fatal("caller CheckRedirect replaced")
+	if calls.Load() != 1 {
+		t.Fatalf("caller CheckRedirect calls = %d", calls.Load())
+	}
+	if v := leaked.Load(); v != "" {
+		t.Fatalf("Authorization forwarded: %q", v)
+	}
+	if hc.CheckRedirect == nil {
+		t.Fatal("caller client mutated")
+	}
+}
+
+func TestCallerCheckRedirectNotCalledWhenSDKPolicyRejects(t *testing.T) {
+	called := false
+	hc := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { called = true; return nil }}
+	cp := withRedirectPolicy(hc)
+	req := &http.Request{URL: &url.URL{Scheme: "file", Path: "/etc/passwd"}, Header: http.Header{}}
+	via := []*http.Request{{URL: &url.URL{Scheme: "https", Host: "a.test"}}}
+	if err := cp.CheckRedirect(req, via); err == nil {
+		t.Fatal("file scheme accepted")
+	}
+	if called {
+		t.Fatal("caller function ran after SDK rejection")
 	}
 }
 
@@ -277,9 +309,94 @@ func TestStreamReadFailureIsTransportError(t *testing.T) {
 	if _, ok := s.Next(); ok {
 		t.Fatal("expected no event")
 	}
+	// An oversize line is not a transport failure: returned unwrapped.
 	var te *TransportError
-	if !errors.As(s.Err(), &te) || !errors.Is(s.Err(), bufio.ErrTooLong) {
+	if errors.As(s.Err(), &te) || s.Err() != bufio.ErrTooLong {
 		t.Fatalf("Err = %#v", s.Err())
+	}
+}
+
+func TestStreamConnectionResetIsTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("data: x\n"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	s, err := c.stream(context.Background(), "/tasks/t/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	for {
+		if _, ok := s.Next(); !ok {
+			break
+		}
+	}
+	var te *TransportError
+	if !errors.As(s.Err(), &te) || te.Err == nil {
+		t.Fatalf("Err = %#v", s.Err())
+	}
+}
+
+func TestStreamContextCancelStaysUnwrapped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := newTestClient(t, srv.URL)
+	s, err := c.stream(ctx, "/tasks/t/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	cancel()
+	if _, ok := s.Next(); ok {
+		t.Fatal("expected no event")
+	}
+	if !errors.Is(s.Err(), context.Canceled) {
+		t.Fatalf("Err = %#v", s.Err())
+	}
+	var te *TransportError
+	if errors.As(s.Err(), &te) {
+		t.Fatalf("cancellation wrapped: %#v", s.Err())
+	}
+}
+
+func TestStreamErrorBodyMultiLineJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("{\n  \"code\": \"bad\",\n  \"message\": \"boom\"\n}\n"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.stream(context.Background(), "/tasks/t/stream")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 502 || apiErr.Message != "boom" || apiErr.Code != "bad" {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestStreamErrorBodyOversizeLineKeepsStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("ok line\n" + strings.Repeat("x", 2<<20)))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, err := c.stream(context.Background(), "/tasks/t/stream")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 502 {
+		t.Fatalf("err = %#v", err)
 	}
 }
 
@@ -309,15 +426,18 @@ func TestErrorKindsForExtraStatuses(t *testing.T) {
 	}
 }
 
-func TestAPIKeyWithLineBreakRejected(t *testing.T) {
-	for _, key := range []string{"a\nb", "a\rb"} {
-		if _, err := NewClient(WithAPIKey(key)); err == nil || !strings.Contains(err.Error(), "line breaks") {
+func TestAPIKeyWithInvalidCharactersRejected(t *testing.T) {
+	for _, key := range []string{"a\nb", "a\rb", "a\x00b", "a\x7fb", "a\x01b"} {
+		if _, err := NewClient(WithAPIKey(key)); err == nil || !strings.Contains(err.Error(), "invalid characters") {
 			t.Fatalf("key %q: err = %v", key, err)
 		}
 	}
-	// Surrounding whitespace is trimmed before the check.
-	if _, err := NewClient(WithAPIKey("abc\n")); err != nil {
-		t.Fatal(err)
+	// Tab inside the key is a valid header value; surrounding whitespace is
+	// trimmed before the check.
+	for _, key := range []string{"a\tb", "abc\n"} {
+		if _, err := NewClient(WithAPIKey(key)); err != nil {
+			t.Fatalf("key %q: %v", key, err)
+		}
 	}
 }
 

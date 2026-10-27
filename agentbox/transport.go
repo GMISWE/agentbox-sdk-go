@@ -45,15 +45,22 @@ func originOf(u *url.URL) string {
 	return scheme + "://" + strings.ToLower(u.Hostname()) + ":" + port
 }
 
-// withRedirectPolicy returns hc with the SDK redirect policy applied. A client
-// that already sets CheckRedirect is returned as is; otherwise a shallow copy
-// is returned so the caller's client is never mutated.
+// withRedirectPolicy returns a shallow copy of hc with the SDK redirect
+// policy applied; the caller's client is never mutated. If hc already sets
+// CheckRedirect, the SDK policy runs first (so credentials are stripped and
+// limits enforced) and the caller's function is called after it.
 func withRedirectPolicy(hc *http.Client) *http.Client {
-	if hc.CheckRedirect != nil {
-		return hc
-	}
 	cp := *hc
-	cp.CheckRedirect = checkRedirect
+	if user := hc.CheckRedirect; user != nil {
+		cp.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if err := checkRedirect(req, via); err != nil {
+				return err
+			}
+			return user(req, via)
+		}
+	} else {
+		cp.CheckRedirect = checkRedirect
+	}
 	return &cp
 }
 

@@ -113,6 +113,17 @@ func defaultBaseURL() string {
 	return DefaultBaseURL
 }
 
+// validHeaderValue reports whether v is usable as an HTTP header field value:
+// no control bytes other than tab, and no DEL.
+func validHeaderValue(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if b := v[i]; (b < 0x20 && b != '\t') || b == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // NewClient constructs an AgentBox client. The API key defaults to
 // GMI_AGENTBOX_API_KEY and is required (via option or env var). The API root
 // defaults to GMI_AGENTBOX_BASE_URL or DefaultBaseURL.
@@ -131,8 +142,8 @@ func NewClient(opts ...Option) (*Client, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("agentbox: GMI_AGENTBOX_API_KEY is required (or use WithAPIKey)")
 	}
-	if strings.ContainsAny(c.APIKey, "\r\n") {
-		return nil, fmt.Errorf("agentbox: API key must not contain line breaks")
+	if !validHeaderValue(c.APIKey) {
+		return nil, fmt.Errorf("agentbox: API key contains invalid characters")
 	}
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
 	c.serviceURL = c.BaseURL
@@ -290,10 +301,14 @@ func (c *Client) stream(ctx context.Context, path string) (*Stream, error) {
 		defer func() {
 			_ = raw.Close()
 		}()
-		var body []byte
+		// Keep line breaks. If scanning fails (e.g. a line over the scanner
+		// limit) the APIError is still built from what was read, so the status
+		// is never lost.
+		var lines []string
 		for raw.Lines.Scan() {
-			body = append(body, raw.Lines.Bytes()...)
+			lines = append(lines, raw.Lines.Text())
 		}
+		body := []byte(strings.Join(lines, "\n"))
 		return nil, errorFromBody(raw.StatusCode, body)
 	}
 	return &Stream{raw: raw}, nil

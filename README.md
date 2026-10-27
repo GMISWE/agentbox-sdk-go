@@ -73,7 +73,11 @@ func deleteAgent(ctx context.Context, agent *agentbox.Agent) {
 			log.Printf("delete agent %s: %v", agent.Slug(), err)
 			return
 		}
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 

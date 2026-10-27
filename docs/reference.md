@@ -30,10 +30,14 @@ URL. The result is exposed as `Client.APIKey` and `Client.BaseURL`.
 Redirects: the default clients (request and stream) follow at most 5
 redirects, only to `http` or `https` targets, and drop `Authorization` and
 `Cookie` when the scheme, host or port changes. A `WithHTTPClient` client that
-already sets `CheckRedirect` keeps it; otherwise the SDK policy is applied to a
-shallow copy, so the caller's client is never mutated. A redirect that cannot
-be followed is an error (`*TransportError`, or `*APIError` for an unfollowable
-3xx response), never a success.
+already sets `CheckRedirect` has it wrapped: the SDK policy (limit, scheme
+check, credential stripping) runs first and, if it allows the redirect, your
+function is called. The SDK always works on a shallow copy, so the caller's
+client is never mutated. A redirect that cannot be followed is an error
+(`*TransportError`, or `*APIError` for a 3xx response that the HTTP client did
+not follow, whose `Location` is not readable; this also applies to a custom
+`WithTransport` or a `CheckRedirect` returning `http.ErrUseLastResponse`),
+never a success.
 
 `DefaultBaseURL` is `https://api.gmi-serving.com/v1/agents`.
 `DefaultWaitTimeout` is `300 * time.Second` (`Sandbox.WaitUntilRunning`).
@@ -321,7 +325,8 @@ Pull with `stream.Next() (StreamEvent, bool)`; check `stream.Err()` after
 | `Raw` | The `data` text (multiple `data:` lines joined by `\n`); for a heartbeat, the full `:` line |
 
 Lines are limited to 1 MiB. `stream.Err()` returns a `*TransportError` (wrapping
-the cause) when reading fails, including an oversize line. 3xx/4xx/5xx
+the cause) when reading fails. Context cancellation or deadline errors and
+`bufio.ErrTooLong` (an oversize line) are returned unwrapped. 3xx/4xx/5xx
 responses return `*APIError` like other calls.
 
 The SDK does not check capabilities; the service decides. On the sandbox
@@ -365,17 +370,20 @@ Opens an interactive shell over WebSocket at `{base}/tasks/{id}/shell`
 (`https` becomes `wss`, `http` becomes `ws`) with the Bearer header.
 Redirects are not followed. A handshake HTTP error returns `*APIError`
 (401 is `ErrorKindAuthentication`, a 3xx is `ErrorKindGeneric`); any other
-connect failure returns `*TransportError`.
+connect failure, including a bad handshake answered with 101 or 2xx, returns
+`*TransportError` (wrapping `websocket.ErrBadHandshake`).
 
 ```go
 type ShellConn interface {
-	Send(message string) error             // write a raw text frame (ignored by the service)
-	Recv() (string, error)                 // read the next text frame, undecoded
-	SendInput(data string) error           // {"type":"stdin","data":data}
-	Resize(cols, rows int) error           // {"type":"resize","cols":cols,"rows":rows}
-	RecvMessage() (ShellMessage, error)    // Recv + JSON decode
+	Send(message string) error // write a text frame
+	Recv() (string, error)     // read the next text frame, undecoded
 	Close() error
 }
+
+func SendShellInput(conn ShellConn, data string) error      // {"type":"stdin","data":data}
+func ResizeShell(conn ShellConn, cols, rows int) error      // {"type":"resize","cols":cols,"rows":rows}
+func RecvShellMessage(conn ShellConn) (ShellMessage, error) // Recv + DecodeShellMessage
+func DecodeShellMessage(text string) ShellMessage
 
 type ShellMessage struct {
 	Type    string // "status", "stdout", "error", or any other JSON type
@@ -387,13 +395,17 @@ type ShellDialer func(ctx context.Context, wsURL string, headers http.Header) (S
 ```
 
 Frames are TEXT with a JSON envelope. The service silently ignores raw text,
-binary frames and unknown types, so use `SendInput` and `Resize` for input;
-`Send` exists for custom frames.
+binary frames and unknown types, so use `SendShellInput` and `ResizeShell` for
+input rather than hand-built frames with `Send`. The helpers only use
+`Send`/`Recv`, so they work with any `ShellConn`, including fakes returned from
+`WithShellDialer`.
 
-- `SendInput(data)` types `data` into the shell; end a command with `"\n"`.
-- `Resize(cols, rows)` returns an error without sending when `cols` or `rows`
-  is not positive.
-- `RecvMessage()` reads one frame and decodes it. `status` carries `Message`
+- `SendShellInput(conn, data)` types `data` into the shell; end a command with
+  `"\n"`.
+- `ResizeShell(conn, cols, rows)` returns an error without sending when `cols`
+  or `rows` is not positive.
+- `RecvShellMessage(conn)` reads one frame and decodes it with
+  `DecodeShellMessage`. `status` carries `Message`
   `connected` or `closed`; `stdout` carries `Data` (raw terminal output with
   input echo and `\r\n`, stderr merged); `error` carries `Message`. A frame
   that is not JSON yields `Type == ""` and `Data` set to the raw text.
@@ -404,12 +416,9 @@ then an `error` message. Running `exit` closes the shell, and later attaches
 are closed immediately, so call `Close` instead. See
 [usage.md](usage.md#shell).
 
-A `ShellConn` allows one concurrent writer (`Send`, `SendInput`, `Resize`) and
-one concurrent reader (`Recv`, `RecvMessage`); `Close` may be called from any
-goroutine to unblock a pending read.
-
-Custom `ShellConn` implementations (via `WithShellDialer`) must implement the
-three methods added alongside `Send`/`Recv`/`Close`.
+A `ShellConn` allows one concurrent writer (`Send`, `SendShellInput`,
+`ResizeShell`) and one concurrent reader (`Recv`, `RecvShellMessage`); `Close`
+may be called from any goroutine to unblock a pending read.
 
 `WithShellDialer` replaces the dialer (testing hook).
 
@@ -757,7 +766,8 @@ DefaultBaseURL, DefaultWaitTimeout, Version
 Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
     WithTransport, WithStreamTransport, WithShellDialer, WithSleep
 Transport, StreamTransport, RawResponse, RawStream
-ShellConn, ShellMessage, ShellDialer
+ShellConn, ShellMessage, ShellDialer, SendShellInput, ResizeShell,
+    RecvShellMessage, DecodeShellMessage
 Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams,
     AgentSandboxListParams
 TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams

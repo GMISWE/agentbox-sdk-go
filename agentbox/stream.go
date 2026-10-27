@@ -1,7 +1,10 @@
 package agentbox
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -64,12 +67,20 @@ func (s *Stream) Next() (StreamEvent, bool) {
 	}
 
 	if err := s.raw.Lines.Err(); err != nil {
-		s.err = newTransportError(err)
+		// Caller cancellation and an oversized line are not transport
+		// failures; return them as is so errors.Is and == keep working.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, bufio.ErrTooLong) {
+			s.err = err
+		} else {
+			s.err = newTransportError(err)
+		}
 	}
 	return StreamEvent{}, false
 }
 
-// Err returns any error encountered while reading the stream.
+// Err returns any error encountered while reading the stream. Read failures
+// are a *TransportError; context cancellation or deadline errors and
+// bufio.ErrTooLong (a line over 1 MiB) are returned unwrapped.
 func (s *Stream) Err() error { return s.err }
 
 // Close releases the underlying connection.
