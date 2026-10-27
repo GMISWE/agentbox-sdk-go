@@ -15,18 +15,34 @@ func NewClient(opts ...Option) (*Client, error)
 
 | Option | Default | Notes |
 |---|---|---|
-| `WithAPIKey(key)` | `GMI_AGENTBOX_API_KEY` | Required API key. `NewClient` errors if unset |
+| `WithAPIKey(key)` | `GMI_AGENTBOX_API_KEY` | Required API key. Whitespace-trimmed. `NewClient` errors if it is unset or contains `\r` or `\n` |
 | `WithBaseURL(url)` | `GMI_AGENTBOX_BASE_URL` or `DefaultBaseURL` | Optional API root, including the path prefix. Production root if unset |
-| `WithTimeout(d)` | `30 * time.Second` | Per HTTP call |
-| `WithHTTPClient(c)` | internal default | Overrides the `*http.Client` used by the default transport |
+| `WithTimeout(d)` | `30 * time.Second` | Timeout of the default request client only. It does not apply to a client from `WithHTTPClient` or to streams (streams have no timeout; use the context) |
+| `WithHTTPClient(c)` | internal default | Overrides the `*http.Client` used by the default request transport (not streams). See redirect policy below |
 | `WithTransport(t)` | internal default | Overrides the request/response transport (for testing) |
 | `WithStreamTransport(t)` | internal default | Overrides the streaming transport (for testing) |
 | `WithSleep(f)` | `time.Sleep` | Overrides the sleep function used by `WaitUntilRunning` polling |
+| `WithShellDialer(d)` | internal default | Overrides the shell WebSocket dialer (for testing) |
+
+`NewClient` trims whitespace from the API key and a trailing `/` from the base
+URL. The result is exposed as `Client.APIKey` and `Client.BaseURL`.
+
+Redirects: the default clients (request and stream) follow at most 5
+redirects, only to `http` or `https` targets, and drop `Authorization` and
+`Cookie` when the scheme, host or port changes. A `WithHTTPClient` client that
+already sets `CheckRedirect` has it wrapped: the SDK policy (limit, scheme
+check, credential stripping) runs first and, if it allows the redirect, your
+function is called. The SDK always works on a shallow copy, so the caller's
+client is never mutated. A redirect that cannot be followed is an error
+(`*TransportError`, or `*APIError` for a 3xx response that the HTTP client did
+not follow, whose `Location` is not readable; this also applies to a custom
+`WithTransport` or a `CheckRedirect` returning `http.ErrUseLastResponse`),
+never a success.
 
 `DefaultBaseURL` is `https://api.gmi-serving.com/v1/agents`.
 `DefaultWaitTimeout` is `300 * time.Second` (`Sandbox.WaitUntilRunning`).
 
-Collections on the client: `Agents`, `Sandboxes`, `Idcs`, `Products`.
+Collections on the client: `Agents`, `Sandboxes`, `Snapshots`, `Idcs`, `Products`.
 Also `client.Eligibility(ctx)`.
 
 #### `client.Health() map[string]any`
@@ -48,7 +64,7 @@ Returns the organization's available runtimes and data centers.
 | `GMI_AGENTBOX_API_KEY` | Required API key |
 | `GMI_AGENTBOX_BASE_URL` | Optional API root; defaults to `DefaultBaseURL` |
 
-Errors expose `Message`, `Code`, and `Details` when supplied by the service.
+See [Errors](#errors) for error fields.
 
 ## Agents
 
@@ -62,6 +78,7 @@ Errors expose `Message`, `Code`, and `Details` when supplied by the service.
 | `ImageURL` | no | Container image |
 | `Idc` | Sandbox: yes; otherwise no | Data center identifier; required with `Runtime: "sandbox"` |
 | `Runtime` | no | `"container"` or `"sandbox"`; defaults to the service default |
+| `DeploymentType` | no | Defaults to `"gmi-ce"` when `Runtime` is `"sandbox"` |
 | `StartCmd` | no | Startup command for a Sandbox |
 | `Env` | no | Environment-variable definitions |
 | `Ports` | no | Port definitions |
@@ -72,7 +89,7 @@ Errors expose `Message`, `Code`, and `Details` when supplied by the service.
 | `ShareStorageMountPath` | no | Shared-storage mount path |
 | `CloneSourceID` | no | Source Agent ID to clone |
 
-Create does not start a container.
+Create does not start a container. `Runtime: "sandbox"` without `InstanceType` or `Idc` is HTTP 422 `sandbox_requires_idc_and_spec` (the SDK does not validate this client-side).
 
 #### `List(ctx, page, pageSize int) (*Page[*Agent], error)`
 
@@ -88,7 +105,10 @@ the API accepts; locked fields return `422`.
 
 #### `Delete(ctx, slug string) error`
 
-Does not stop or delete running sandboxes of that Agent.
+Returns HTTP 409 (`IsConflictError`, for example `sandbox_template_in_use`)
+while the Agent still has sandboxes; it never stops or deletes them. Delete the
+sandboxes first. Right after the last one is deleted the service can still
+return 409 for a few seconds, so retry on `IsConflictError`.
 
 ### `Agent`
 
@@ -106,8 +126,15 @@ Represents an Agent.
 | `TemplateBuildError()` | `string` | Sandbox image-build error |
 | `Env()` | `[]any` | Copy of `env` |
 | `Revision()` | `int` | |
-| `GeneratedAPIKey()` | `string` | Plaintext MaaS key on **create** only |
+| `GeneratedAPIKey()` | `string` | Plaintext MaaS key. Only `Create` can return it; see below |
 | `Launchable()` | `bool` | Whether the Agent can be launched |
+
+`Create` returns `generated_api_key` only when it generates a MaaS key; an
+Agent created without `GMI_MODELS` gets none (empty), as seen for both the
+sandbox and container runtimes. `GET` and `PATCH` never return it, so agents from
+`client.Agents.Get` / `client.Agents.Update` have none. Store the key when you
+create the Agent. `agent.Refresh` and `agent.Update` keep the in-memory value
+(a non-empty new value would win).
 
 #### `agent.Refresh(ctx) error`
 
@@ -118,6 +145,10 @@ Reloads the Agent in place.
 Same as `client.Agents.Update(ctx, agent.Slug(), fields)`, applied in place.
 
 #### `agent.Delete(ctx) error`
+
+Same as `client.Agents.Delete(ctx, agent.Slug())`: HTTP 409 (`IsConflictError`)
+while the Agent still has sandboxes. Delete them first; right after the last
+one is deleted it can still return 409 for a few seconds, so retry.
 
 #### `agent.Launch(ctx, LaunchParams) (*Sandbox, error)`
 
@@ -148,8 +179,8 @@ IDC must be the snapshot's (a different one is HTTP 422).
 | 409 | `snapshot_not_ready` | The snapshot is not `ready` yet |
 | 422 | `sandbox_only_operation` | `SnapshotID` on a container Agent |
 
-Launch returns immediately. Call `Refresh` or `WaitUntilRunning` for
-current state.
+Launch returns immediately. A new sandbox starts as `pending`; call `Refresh`
+or `WaitUntilRunning` (which waits through `pending`) for current state.
 
 #### `agent.ListSnapshots(ctx) ([]*Snapshot, error)`
 
@@ -285,17 +316,30 @@ One-way. The sandbox cannot be restarted.
 #### `Stream(ctx, sandboxID string) (*Stream, error)`
 
 Pull with `stream.Next() (StreamEvent, bool)`; check `stream.Err()` after
-`Next` returns `false`. Comment lines (`: ping`) are `Event="heartbeat"`.
-4xx/5xx return the same `*APIError` types as other calls.
+`Next` returns `false`. Always call `stream.Close()`.
 
-Metrics and stream methods require the corresponding Sandbox capability to
-be available.
+| `StreamEvent` field | Value |
+|---|---|
+| `Event` | Event name; `message` when the event has none; `heartbeat` for `:` comment lines; the service also sends `status` |
+| `Data` | JSON-decoded `data` when it parses, otherwise the raw string; for a heartbeat, the comment text |
+| `Raw` | The `data` text (multiple `data:` lines joined by `\n`); for a heartbeat, the full `:` line |
+
+Lines are limited to 1 MiB. `stream.Err()` returns a `*TransportError` (wrapping
+the cause) when reading fails. Context cancellation or deadline errors and
+`bufio.ErrTooLong` (an oversize line) are returned unwrapped. 3xx/4xx/5xx
+responses return `*APIError` like other calls.
+
+The SDK does not check capabilities; the service decides. On the sandbox
+runtime, `Metrics` and `MetricsTimeseries` return HTTP 501
+`not_supported_by_runtime` (`IsNotSupportedError`).
 
 #### `Execute(ctx, sandboxID, command string, ExecuteParams) (*Execution, error)`
 
-Runs a command in a Sandbox. A completed command returns `Accepted=false`; an
-accepted asynchronous command returns `Accepted=true`. `WaitTimeoutSeconds`
-accepts values from 1 through 25 and is ignored when `Wait` is false.
+Runs a command in a Sandbox. Sends `command`, `wait` (default true) and, only
+when `wait` is true and `WaitTimeoutSeconds` is set, `wait_timeout_seconds`.
+A completed command returns `Accepted=false`; an accepted asynchronous command
+returns `Accepted=true`. `WaitTimeoutSeconds` accepts values from 1 through 25
+and is ignored when `Wait` is false.
 
 #### `GetExecution(ctx, sandboxID, executionID string) (*Execution, error)`
 
@@ -307,12 +351,76 @@ Requests cancellation of an execution.
 
 #### `UploadFile(ctx, sandboxID, sandboxPath, filename string, content io.Reader) ([]map[string]any, error)`
 
-Uploads content to an absolute Sandbox path. `filename` defaults to
-`path.Base(sandboxPath)` when empty.
+Uploads content to an absolute Sandbox path as a multipart request: query
+param `path`, form field `file`. `filename` defaults to
+`path.Base(sandboxPath)` when empty. Returns the decoded JSON array.
 
 #### `DownloadFile(ctx, sandboxID, sandboxPath string) (*FileDownload, error)`
 
-Downloads a file from an absolute Sandbox path.
+Downloads a file from an absolute Sandbox path (query param `path`).
+`Filename` comes from `Content-Disposition`, else `path.Base(sandboxPath)`.
+
+Both `UploadFile` and `DownloadFile` validate the path first: it is
+percent-decoded, an invalid escape is rejected, and the decoded path must be
+absolute and contain no `.` or `..` segment.
+
+#### `Shell(ctx, sandboxID string) (ShellConn, error)`
+
+Opens an interactive shell over WebSocket at `{base}/tasks/{id}/shell`
+(`https` becomes `wss`, `http` becomes `ws`) with the Bearer header.
+Redirects are not followed. A handshake HTTP error returns `*APIError`
+(401 is `ErrorKindAuthentication`, a 3xx is `ErrorKindGeneric`); any other
+connect failure, including a bad handshake answered with 101 or 2xx, returns
+`*TransportError` (wrapping `websocket.ErrBadHandshake`).
+
+```go
+type ShellConn interface {
+	Send(message string) error // write a text frame
+	Recv() (string, error)     // read the next text frame, undecoded
+	Close() error
+}
+
+func SendShellInput(conn ShellConn, data string) error      // {"type":"stdin","data":data}
+func ResizeShell(conn ShellConn, cols, rows int) error      // {"type":"resize","cols":cols,"rows":rows}
+func RecvShellMessage(conn ShellConn) (ShellMessage, error) // Recv + DecodeShellMessage
+func DecodeShellMessage(text string) ShellMessage
+
+type ShellMessage struct {
+	Type    string // "status", "stdout", "error", or any other JSON type
+	Data    string // stdout: raw TTY output
+	Message string // status ("connected"/"closed") and error text
+}
+
+type ShellDialer func(ctx context.Context, wsURL string, headers http.Header) (ShellConn, error)
+```
+
+Frames are TEXT with a JSON envelope. The service silently ignores raw text,
+binary frames and unknown types, so use `SendShellInput` and `ResizeShell` for
+input rather than hand-built frames with `Send`. The helpers only use
+`Send`/`Recv`, so they work with any `ShellConn`, including fakes returned from
+`WithShellDialer`.
+
+- `SendShellInput(conn, data)` types `data` into the shell; end a command with
+  `"\n"`.
+- `ResizeShell(conn, cols, rows)` returns an error without sending when `cols`
+  or `rows` is not positive.
+- `RecvShellMessage(conn)` reads one frame and decodes it with
+  `DecodeShellMessage`. `status` carries `Message`
+  `connected` or `closed`; `stdout` carries `Data` (raw terminal output with
+  input echo and `\r\n`, stderr merged); `error` carries `Message`. A frame
+  that is not JSON yields `Type == ""` and `Data` set to the raw text.
+
+The shell runs as root with bash (`HOME=/root`). Reconnecting resumes the same
+session. Only one connection is active: a second attach receives `connected`
+then an `error` message. Running `exit` closes the shell, and later attaches
+are closed immediately, so call `Close` instead. See
+[usage.md](usage.md#shell).
+
+A `ShellConn` allows one concurrent writer (`Send`, `SendShellInput`,
+`ResizeShell`) and one concurrent reader (`Recv`, `RecvShellMessage`); `Close`
+may be called from any goroutine to unblock a pending read.
+
+`WithShellDialer` replaces the dialer (testing hook).
 
 ### `Sandbox`
 
@@ -322,7 +430,7 @@ Represents a Sandbox.
 |---|---|---|
 | `ID()` | `string` | Sandbox ID |
 | `Status()` | `string` | Current lifecycle status |
-| `EndpointURL()` | `string` | Empty until running (and can still be empty after) |
+| `EndpointURL()` | `string` | Empty until running; on the sandbox runtime it holds the data-plane URL once running |
 | `AgentID()` | `string` | Owning Agent ID |
 | `AgentSlug()` | `string` | Owning Agent slug |
 | `DisplayName()` | `string` | |
@@ -366,6 +474,10 @@ Same as `client.Sandboxes.CreateSnapshot`. The returned snapshot carries
 
 #### `sandbox.Stream(ctx) (*Stream, error)`
 
+#### `sandbox.Shell(ctx) (ShellConn, error)`
+
+Same as `client.Sandboxes.Shell`.
+
 #### `sandbox.Execute(ctx, command string, ExecuteParams) (*Execution, error)`
 
 Runs a command. `Execution.Accepted` is true when execution continues
@@ -381,14 +493,14 @@ and is ignored when `Wait` is false.
 
 #### `sandbox.DownloadFile(ctx, sandboxPath string) (*FileDownload, error)`
 
-Returns `FileDownload{Content, Filename, Header}`. Paths must be absolute and
-cannot contain `.` or `..` segments.
+Returns `FileDownload{Content, Filename, Header}`. Path rules are the same as
+`client.Sandboxes.DownloadFile`.
 
 #### `sandbox.Delete(ctx) error`
 
 #### `sandbox.WaitUntilRunning(ctx, WaitUntilRunningParams) error`
 
-Polls until `Status() == "running"`. Defaults: `Timeout: DefaultWaitTimeout`,
+Polls until `Status() == "running"`; a new sandbox is `pending` first. Defaults: `Timeout: DefaultWaitTimeout`,
 `PollInterval: 2 * time.Second`.
 
 | Outcome | Result |
@@ -600,12 +712,16 @@ All SDK errors are ordinary Go `error` values; use `errors.As` to unwrap
 
 | Type | When |
 |---|---|
-| `*TransportError` | The service could not be reached |
-| `*APIError` | The server rejected a request; `Kind` distinguishes the variant below |
+| `*TransportError` | The service could not be reached, a URL or redirect is invalid, or reading a response or `Stream` failed |
+| `*APIError` | The server rejected a request, or returned a 3xx that could not be followed; `Kind` distinguishes the variant below |
 | `*SandboxFailed` | Wait hit a terminal non-running status |
 | `*SandboxWaitTimeout` | Wait exceeded `Timeout` |
 | `*SnapshotFailed` | `WaitUntilReady` hit `error`, `deleting` or `delete_failed` |
 | `*SnapshotWaitTimeout` | `WaitUntilReady` exceeded `Timeout` |
+
+`TransportError` has `Message` and `Err` (the cause) and implements `Unwrap`,
+so `errors.Is` / `errors.As` reach the cause. `Stream.Err()` returns a
+`*TransportError`.
 
 `APIError.Kind` values and matching helpers:
 
@@ -618,12 +734,26 @@ All SDK errors are ordinary Go `error` values; use `errors.As` to unwrap
 | `ErrorKindConflict` | `IsConflictError(err)` | 409 |
 | `ErrorKindUnprocessable` | `IsUnprocessableError(err)` | 422 |
 | `ErrorKindGone` | `IsGoneError(err)` | 410 |
+| `ErrorKindRequestTooLarge` | `IsRequestTooLargeError(err)` | 413 |
+| `ErrorKindUnsupportedMediaType` | `IsUnsupportedMediaTypeError(err)` | 415 |
+| `ErrorKindRangeNotSatisfiable` | `IsRangeNotSatisfiableError(err)` | 416 |
 | `ErrorKindRateLimit` | `IsRateLimitError(err)` | 429 |
+| `ErrorKindRequestCanceled` | `IsRequestCanceledError(err)` | 499 |
 | `ErrorKindNotSupported` | `IsNotSupportedError(err)` | 501 |
-| `ErrorKindServer` | `IsServerError(err)` | 5xx other than 501 |
-| `ErrorKindGeneric` | — | other |
+| `ErrorKindServer` | `IsServerError(err)` | 5xx other than 501 (including 507) |
+| `ErrorKindGeneric` | — | other, including any 3xx |
 
-`APIError` fields: `StatusCode`, `Message`, `Code`, `Details`.
+`IsInsufficientStorageError(err)` matches HTTP 507. 507 keeps
+`ErrorKindServer`, so `IsServerError` is also true for it. In earlier
+versions 413, 415, 416 and 499 were `ErrorKindGeneric`.
+
+The `Is*Error` helpers use `errors.As`, so they also match an `*APIError`
+wrapped with `fmt.Errorf("...: %w", err)`.
+
+`APIError` fields: `Kind`, `StatusCode`, `Message`, `Code`, `Details`. They
+come from the JSON body: `Message` from `error`, else `message`; `Code` from
+`code`; `Details` from `details`. A non-JSON body becomes the message as raw
+text.
 
 ## Public exports
 
@@ -634,7 +764,10 @@ import "github.com/GMISWE/agentbox-sdk-go/agentbox"
 ```
 DefaultBaseURL, DefaultWaitTimeout, Version
 Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
-    WithTransport, WithStreamTransport, WithSleep
+    WithTransport, WithStreamTransport, WithShellDialer, WithSleep
+Transport, StreamTransport, RawResponse, RawStream
+ShellConn, ShellMessage, ShellDialer, SendShellInput, ResizeShell,
+    RecvShellMessage, DecodeShellMessage
 Agent, AgentCollection, AgentCreateParams, AgentUpdateFields, LaunchParams,
     AgentSandboxListParams
 TemplateBuild, TemplateBuildFailure, BuildLogEntry, BuildLogPage, BuildLogParams
@@ -650,4 +783,7 @@ StreamEvent, Stream
 TransportError, SandboxFailed, SandboxWaitTimeout, SnapshotFailed,
     SnapshotWaitTimeout
 APIError, ErrorKind (+ ErrorKind* constants), Is*Error helpers
+    (incl. IsRequestTooLargeError, IsUnsupportedMediaTypeError,
+    IsRangeNotSatisfiableError, IsRequestCanceledError,
+    IsInsufficientStorageError)
 ```

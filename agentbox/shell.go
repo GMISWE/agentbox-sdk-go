@@ -2,12 +2,43 @@ package agentbox
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/gorilla/websocket"
 )
 
+// ShellMessage is one message received from the shell service.
+//
+// Known Type values:
+//
+//   - "status": Message is "connected" (first message) or "closed" (the shell
+//     ended and the service is about to close the socket).
+//   - "stdout": Data is raw terminal output, including the echo of your input,
+//     "\r\n" line endings and control sequences. stderr is merged into stdout.
+//   - "error": Message describes the problem, for example a second concurrent
+//     attach to the same sandbox.
+//
+// Other JSON types pass through unchanged. A text frame that is not JSON
+// yields Type "" with Data set to the raw text.
+type ShellMessage struct {
+	Type    string `json:"type"`
+	Data    string `json:"data,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
 // ShellConn is an interactive Sandbox shell connection.
+//
+// The service speaks TEXT frames carrying a JSON envelope; raw text, binary
+// frames and unknown message types are silently ignored. Use SendShellInput,
+// ResizeShell and RecvShellMessage to talk to the shell instead of calling
+// Send and Recv with hand-built frames. They work with any ShellConn.
+//
+// A ShellConn is not safe for concurrent writers. At most one goroutine may
+// read at a time. One writer and one reader may run together, and Close may
+// be called from any goroutine to unblock a pending read.
 type ShellConn interface {
 	// Send writes a text message to the shell.
 	Send(message string) error
@@ -15,6 +46,58 @@ type ShellConn interface {
 	Recv() (string, error)
 	// Close closes the connection.
 	Close() error
+}
+
+func sendShellJSON(conn ShellConn, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return conn.Send(string(data))
+}
+
+// SendShellInput writes {"type":"stdin","data":data} with conn.Send. data is
+// typed into the shell as is, so end a command with "\n".
+func SendShellInput(conn ShellConn, data string) error {
+	return sendShellJSON(conn, struct {
+		Type string `json:"type"`
+		Data string `json:"data"`
+	}{"stdin", data})
+}
+
+// ResizeShell writes {"type":"resize","cols":cols,"rows":rows} with
+// conn.Send. It returns an error without sending when cols or rows is not
+// positive.
+func ResizeShell(conn ShellConn, cols, rows int) error {
+	if cols <= 0 || rows <= 0 {
+		return fmt.Errorf("agentbox: shell size must be positive, got cols=%d rows=%d", cols, rows)
+	}
+	return sendShellJSON(conn, struct {
+		Type string `json:"type"`
+		Cols int    `json:"cols"`
+		Rows int    `json:"rows"`
+	}{"resize", cols, rows})
+}
+
+// RecvShellMessage reads the next text frame with conn.Recv and decodes it
+// with DecodeShellMessage.
+func RecvShellMessage(conn ShellConn) (ShellMessage, error) {
+	text, err := conn.Recv()
+	if err != nil {
+		return ShellMessage{}, err
+	}
+	return DecodeShellMessage(text), nil
+}
+
+// DecodeShellMessage decodes one text frame. A JSON object with a non-empty
+// "type" is decoded; anything else (plain text, "null", arrays, objects
+// without a type) yields Type "" with Data set to the raw text.
+func DecodeShellMessage(text string) ShellMessage {
+	var m ShellMessage
+	if err := json.Unmarshal([]byte(text), &m); err != nil || m.Type == "" {
+		return ShellMessage{Data: text}
+	}
+	return m
 }
 
 // ShellDialer opens an authenticated shell WebSocket connection.
@@ -42,9 +125,18 @@ func (w *wsShellConn) Close() error {
 
 func defaultShellDialer(ctx context.Context, wsURL string, headers http.Header) (ShellConn, error) {
 	dialer := *websocket.DefaultDialer
-	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
+	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
-		return nil, &TransportError{Message: err.Error()}
+		if resp != nil {
+			defer func() { _ = resp.Body.Close() }()
+			// Only a real HTTP error answer maps to APIError. A 101 with a bad
+			// accept key or a 2xx from a proxy stays a transport failure.
+			if resp.StatusCode >= 300 {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+				return nil, errorFromBody(resp.StatusCode, body)
+			}
+		}
+		return nil, newTransportError(err)
 	}
 	return &wsShellConn{conn: conn}, nil
 }

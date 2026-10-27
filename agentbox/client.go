@@ -113,6 +113,17 @@ func defaultBaseURL() string {
 	return DefaultBaseURL
 }
 
+// validHeaderValue reports whether v is usable as an HTTP header field value:
+// no control bytes other than tab, and no DEL.
+func validHeaderValue(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if b := v[i]; (b < 0x20 && b != '\t') || b == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // NewClient constructs an AgentBox client. The API key defaults to
 // GMI_AGENTBOX_API_KEY and is required (via option or env var). The API root
 // defaults to GMI_AGENTBOX_BASE_URL or DefaultBaseURL.
@@ -131,17 +142,24 @@ func NewClient(opts ...Option) (*Client, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("agentbox: GMI_AGENTBOX_API_KEY is required (or use WithAPIKey)")
 	}
+	if !validHeaderValue(c.APIKey) {
+		return nil, fmt.Errorf("agentbox: API key contains invalid characters")
+	}
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
 	c.serviceURL = c.BaseURL
 
 	if c.httpClient == nil {
-		c.httpClient = &http.Client{Timeout: c.timeout}
+		c.httpClient = &http.Client{Timeout: c.timeout, CheckRedirect: checkRedirect}
+	} else {
+		c.httpClient = withRedirectPolicy(c.httpClient)
 	}
 	if c.transport == nil {
 		c.transport = defaultTransport(c.httpClient)
 	}
 	if c.streamTransport == nil {
-		c.streamTransport = defaultStreamTransport(&http.Client{})
+		// The stream client never carries the request Timeout (it would cut
+		// long-lived streams), and has never been derived from WithHTTPClient.
+		c.streamTransport = defaultStreamTransport(&http.Client{CheckRedirect: checkRedirect})
 	}
 	if c.shellDialer == nil {
 		c.shellDialer = defaultShellDialer
@@ -250,12 +268,8 @@ func (c *Client) requestRaw(ctx context.Context, method, path string, params map
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode >= 400 {
-		payload := jsonLoads(resp.Body)
-		if payload != nil {
-			return nil, errorFromResponse(resp.StatusCode, payload)
-		}
-		return nil, errorFromResponse(resp.StatusCode, string(resp.Body))
+	if resp.StatusCode >= 300 {
+		return nil, errorFromBody(resp.StatusCode, resp.Body)
 	}
 	return resp, nil
 }
@@ -283,19 +297,19 @@ func (c *Client) stream(ctx context.Context, path string) (*Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	if raw.StatusCode >= 400 {
+	if raw.StatusCode >= 300 {
 		defer func() {
 			_ = raw.Close()
 		}()
-		var body []byte
+		// Keep line breaks. If scanning fails (e.g. a line over the scanner
+		// limit) the APIError is still built from what was read, so the status
+		// is never lost.
+		var lines []string
 		for raw.Lines.Scan() {
-			body = append(body, raw.Lines.Bytes()...)
+			lines = append(lines, raw.Lines.Text())
 		}
-		payload := jsonLoads(body)
-		if payload != nil {
-			return nil, errorFromResponse(raw.StatusCode, payload)
-		}
-		return nil, errorFromResponse(raw.StatusCode, string(body))
+		body := []byte(strings.Join(lines, "\n"))
+		return nil, errorFromBody(raw.StatusCode, body)
 	}
 	return &Stream{raw: raw}, nil
 }

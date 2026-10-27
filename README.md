@@ -60,6 +60,27 @@ func waitForTemplate(ctx context.Context, agent *agentbox.Agent) error {
 	}
 }
 
+// deleteAgent retries while the service still reports the Agent in use (HTTP
+// 409), which happens until its sandboxes are gone and briefly afterwards.
+func deleteAgent(ctx context.Context, agent *agentbox.Agent) {
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		err := agent.Delete(ctx)
+		if err == nil || agentbox.IsNotFoundError(err) {
+			return
+		}
+		if !agentbox.IsConflictError(err) || time.Now().After(deadline) {
+			log.Printf("delete agent %s: %v", agent.Slug(), err)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 func main() {
 	ctx := context.Background()
 
@@ -83,8 +104,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// agent.GeneratedAPIKey() is plaintext only on this response
-	defer agent.Delete(ctx)
+	// agent.GeneratedAPIKey() is plaintext only on this response (empty unless
+	// create generated a MaaS key, e.g. for GMI_MODELS).
+	// Deferred calls run last-in, first-out: the sandbox is deleted first, then
+	// deleteAgent retries the 409 the Agent returns until it is free.
+	defer deleteAgent(ctx, agent)
 
 	if err := waitForTemplate(ctx, agent); err != nil {
 		log.Print(err)

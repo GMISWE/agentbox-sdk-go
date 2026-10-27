@@ -1,13 +1,26 @@
 package agentbox
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // TransportError means the request could not reach the configured endpoint.
 type TransportError struct {
 	Message string
+	// Err is the underlying cause, if any. It is reachable via errors.Is and
+	// errors.As.
+	Err error
 }
 
 func (e *TransportError) Error() string { return e.Message }
+
+// Unwrap returns the underlying cause.
+func (e *TransportError) Unwrap() error { return e.Err }
+
+func newTransportError(err error) *TransportError {
+	return &TransportError{Message: err.Error(), Err: err}
+}
 
 // SandboxWaitTimeout means WaitUntilRunning exceeded its timeout before the
 // sandbox reached the running status.
@@ -58,6 +71,11 @@ const (
 	ErrorKindRateLimit        ErrorKind = "rate_limit"
 	ErrorKindNotSupported     ErrorKind = "not_supported"
 	ErrorKindServer           ErrorKind = "server_error"
+
+	ErrorKindRequestTooLarge      ErrorKind = "request_too_large"
+	ErrorKindUnsupportedMediaType ErrorKind = "unsupported_media_type"
+	ErrorKindRangeNotSatisfiable  ErrorKind = "range_not_satisfiable"
+	ErrorKindRequestCanceled      ErrorKind = "request_canceled"
 )
 
 // APIError means the server rejected a request. Kind distinguishes the
@@ -112,9 +130,32 @@ func IsNotSupportedError(err error) bool { return isAPIErrorKind(err, ErrorKindN
 // other than 501.
 func IsServerError(err error) bool { return isAPIErrorKind(err, ErrorKindServer) }
 
+// IsRequestTooLargeError reports whether err is an APIError for HTTP 413.
+func IsRequestTooLargeError(err error) bool { return isAPIErrorKind(err, ErrorKindRequestTooLarge) }
+
+// IsUnsupportedMediaTypeError reports whether err is an APIError for HTTP 415.
+func IsUnsupportedMediaTypeError(err error) bool {
+	return isAPIErrorKind(err, ErrorKindUnsupportedMediaType)
+}
+
+// IsRangeNotSatisfiableError reports whether err is an APIError for HTTP 416.
+func IsRangeNotSatisfiableError(err error) bool {
+	return isAPIErrorKind(err, ErrorKindRangeNotSatisfiable)
+}
+
+// IsRequestCanceledError reports whether err is an APIError for HTTP 499.
+func IsRequestCanceledError(err error) bool { return isAPIErrorKind(err, ErrorKindRequestCanceled) }
+
+// IsInsufficientStorageError reports whether err is an APIError for HTTP 507.
+// It keeps ErrorKindServer, so IsServerError is also true for it.
+func IsInsufficientStorageError(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == 507
+}
+
 func isAPIErrorKind(err error, kind ErrorKind) bool {
-	apiErr, ok := err.(*APIError)
-	return ok && apiErr.Kind == kind
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Kind == kind
 }
 
 func errorKindForStatus(statusCode int) ErrorKind {
@@ -131,10 +172,18 @@ func errorKindForStatus(statusCode int) ErrorKind {
 		return ErrorKindConflict
 	case 410:
 		return ErrorKindGone
+	case 413:
+		return ErrorKindRequestTooLarge
+	case 415:
+		return ErrorKindUnsupportedMediaType
+	case 416:
+		return ErrorKindRangeNotSatisfiable
 	case 422:
 		return ErrorKindUnprocessable
 	case 429:
 		return ErrorKindRateLimit
+	case 499:
+		return ErrorKindRequestCanceled
 	case 501:
 		return ErrorKindNotSupported
 	}
@@ -142,6 +191,15 @@ func errorKindForStatus(statusCode int) ErrorKind {
 		return ErrorKindServer
 	}
 	return ErrorKindGeneric
+}
+
+// errorFromBody maps an error response body: a JSON body goes through
+// errorFromResponse, anything else becomes the message as raw text.
+func errorFromBody(statusCode int, body []byte) error {
+	if payload := jsonLoads(body); payload != nil {
+		return errorFromResponse(statusCode, payload)
+	}
+	return errorFromResponse(statusCode, string(body))
 }
 
 // errorFromResponse maps API `{error}` payloads (and message/code variants)

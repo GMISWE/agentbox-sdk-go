@@ -22,7 +22,9 @@ export GMI_AGENTBOX_API_KEY="your-api-key"
 ```
 
 `GMI_AGENTBOX_API_KEY` is required when constructing `agentbox.NewClient()`
-with no `WithAPIKey` option.
+with no `WithAPIKey` option. The key is whitespace-trimmed; a key containing
+control characters (anything below 0x20 except tab, or DEL)
+is rejected by `NewClient`.
 
 Or pass it explicitly:
 
@@ -171,7 +173,7 @@ agent, err := client.Agents.Create(ctx, agentbox.AgentCreateParams{
 fmt.Println(agent.Slug(), agent.Launchable())
 ```
 
-- `agent.GeneratedAPIKey()` is plaintext only on create (and rare patch retries).
+- `agent.GeneratedAPIKey()` is returned only by create, and only when create generates a MaaS key: an Agent without `GMI_MODELS` gets none (empty) on both the sandbox and container runtimes. `client.Agents.Get` and `Update` results do not carry it, so store it now. `agent.Refresh` and `agent.Update` keep the in-memory value.
 - `agent.Launchable()` is false when the upstream template is missing.
 
 Later:
@@ -197,13 +199,13 @@ err = sandbox.Refresh(ctx)
 fmt.Println(sandbox.Status(), sandbox.LastError(), sandbox.EndpointURL())
 ```
 
-`WaitUntilRunning` polls until `running`. It returns:
+A new sandbox starts as `pending`. `WaitUntilRunning` polls until `running`. It returns:
 
 - `*agentbox.SandboxFailed` if status is `error`, `deleted`, `stopped`, or `stopping`
 - `*agentbox.SandboxWaitTimeout` if the timeout elapses first
 
-`EndpointURL()` is empty until the sandbox is running, and can still be empty
-after `running`. Do not assume an HTTP URL is always present.
+`EndpointURL()` is empty until the sandbox is running. On the sandbox runtime it
+holds the data-plane URL once the sandbox is `running`.
 
 ## Metadata and expiry
 
@@ -313,8 +315,77 @@ fmt.Println(download.Filename, download.Content)
 
 `Wait: &wait` (false) returns an accepted execution; retrieve its latest state
 with `sandbox.GetExecution(ctx, execution.ID())`. `WaitTimeoutSeconds` accepts
-values from 1 through 25 and is ignored when `Wait` is false. File paths must
-be absolute and cannot contain `.` or `..` segments.
+values from 1 through 25 and is ignored when `Wait` is false. File paths (upload
+and download) are percent-decoded, then must be absolute and cannot contain `.`
+or `..` segments.
+
+## Shell
+
+```go
+conn, err := sandbox.Shell(ctx)
+if err != nil {
+	return err
+}
+defer conn.Close() // close the connection; do not run `exit`
+
+// First message is {"type":"status","message":"connected"}.
+msg, err := agentbox.RecvShellMessage(conn)
+
+err = agentbox.ResizeShell(conn, 120, 32) // terminal size, optional
+err = agentbox.SendShellInput(conn, "cd /tmp && pwd\n") // end a command with a newline
+for {
+	msg, err = agentbox.RecvShellMessage(conn)
+	if err != nil {
+		return err
+	}
+	if msg.Type == "stdout" {
+		fmt.Print(msg.Data)
+		break
+	}
+}
+```
+
+See [examples/shell](../examples/shell) for a complete program.
+
+The shell is a WebSocket to `/tasks/{id}/shell`; redirects are not followed. A
+handshake HTTP error (status 300 or above) is an `*APIError` (401 is
+`IsAuthenticationError`); other connect failures, including a bad handshake
+answered with 101 or 2xx, are a `*TransportError`.
+
+### Protocol
+
+Messages are TEXT frames carrying JSON. Send them with `SendShellInput` and
+`ResizeShell`; raw text (`conn.Send`), binary frames and unknown types are
+silently ignored by the service. `RecvShellMessage` decodes what the service
+sends (`DecodeShellMessage` does the same for a frame you already hold):
+
+| `Type` | Fields | Meaning |
+| --- | --- | --- |
+| `status` | `Message` | `connected` (first message) or `closed` (the shell ended) |
+| `stdout` | `Data` | Raw terminal output |
+| `error` | `Message` | A problem, for example a second concurrent attach |
+
+Other types pass through unchanged. A text frame that is not JSON yields
+`Type == ""` with `Data` set to the raw text. `Recv` returns the frame
+undecoded.
+
+### Session behaviour
+
+- The shell runs as root with bash and `HOME=/root`.
+- Output is raw terminal output: it contains the echo of your input, `\r\n`
+  line endings and control characters, and stderr is merged into stdout. Use
+  `Execute` when you need clean output and exit codes.
+- Disconnecting and reconnecting resumes the same session; the working
+  directory and exported variables are kept.
+- At most one connection is active. A second concurrent attach completes the
+  handshake, receives `connected` and then an `error` message, and gets no
+  output; the first connection is unaffected.
+- Running `exit` makes the service send status `closed` and close the socket.
+  Later attaches to that sandbox are closed immediately (`connected`, then
+  `closed`). Close the connection instead of running `exit`.
+- Latency is not guaranteed; do not depend on timing.
+- A connection supports one writer goroutine and one reader goroutine at a
+  time; do not call `SendShellInput`, `ResizeShell` or `Send` concurrently.
 
 ## List and filter sandboxes
 
@@ -333,38 +404,43 @@ Pass `Status` when you need those.
 
 ```go
 sandbox.Delete(ctx) // one-way; the sandbox cannot be restarted
-agent.Delete(ctx)   // does not stop or delete remaining sandboxes
+agent.Delete(ctx)   // returns 409 while the Agent still has sandboxes; delete them first
 ```
+
+`agent.Delete` returns HTTP 409 (`agentbox.IsConflictError`) while the Agent
+still has sandboxes, and can keep returning it for a few seconds right after
+the last one is deleted. Retry on `IsConflictError`, as
+`examples/internal/exampleutil.DeleteAgent` does.
 
 Always delete sandboxes you launched in tests. They bill the Console account.
 
 ## Log stream
 
-The SDK supports log streaming when the Sandbox provides the `logs_stream`
-capability:
-
 ```go
-if caps := sandbox.Capabilities(); caps["logs_stream"] == true {
-	stream, err := sandbox.Stream(ctx)
-	if err != nil {
-		log.Fatal(err)
+stream, err := sandbox.Stream(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+defer stream.Close()
+for {
+	event, ok := stream.Next()
+	if !ok {
+		break
 	}
-	defer stream.Close()
-	for {
-		event, ok := stream.Next()
-		if !ok {
-			break
-		}
-		fmt.Println(event.Event, event.Data)
-		if event.Event == "status" {
-			break
-		}
+	fmt.Println(event.Event, event.Data)
+	if event.Event == "status" {
+		break
 	}
+}
+if err := stream.Err(); err != nil {
+	log.Fatal(err) // *agentbox.TransportError
 }
 ```
 
-When unavailable, this call returns an unsupported-runtime error. A backend
-can enable the capability without requiring an SDK update.
+The SDK does not check capabilities; the service decides, and an unsupported
+runtime returns an error. `Event` is `message` when unnamed, `heartbeat` for
+`:` comment lines, and `status` is sent by the service. `Data` is JSON-decoded
+when possible, else the raw string. Close the stream when done.
 
 ## Template build logs
 
@@ -435,18 +511,29 @@ including for a successful build.
 entitlement, err := client.Eligibility(ctx)
 fmt.Println(entitlement.Eligible, entitlement.DataCenters)
 
-if caps := sandbox.Capabilities(); caps["metrics"] == true {
-	batch, err := sandbox.Metrics(ctx, agentbox.MetricsParams{Start: start, End: end, Kinds: []string{"cpu", "memory"}})
-	series, err := sandbox.MetricsTimeseries(ctx, agentbox.MetricsTimeseriesParams{Kind: "cpu", Start: start, End: end})
+batch, err := sandbox.Metrics(ctx, agentbox.MetricsParams{Start: start, End: end, Kinds: []string{"cpu", "memory"}})
+switch {
+case agentbox.IsNotSupportedError(err):
+	fmt.Println("metrics are not supported by this runtime")
+case err != nil:
+	panic(err)
+default:
+	for _, series := range batch.Results {
+		fmt.Println(series.Kind, series.EmptyReason, len(series.Points))
+	}
+}
+
+series, err := sandbox.MetricsTimeseries(ctx, agentbox.MetricsTimeseriesParams{Kind: "cpu", Start: start, End: end})
+if err == nil {
 	fmt.Println(series.EmptyReason, series.Points)
 }
 ```
 
 `Kinds` omitted means the API default (all 8 charts): `gpu_util`, `gpu_mem`,
 `cpu`, `memory`, `disk_read`, `disk_write`, `net_rx`, `net_tx`. `Start` /
-`End` are unix seconds. Metrics are callable only when the Sandbox provides
-the `metrics` capability; otherwise the service reports that the runtime does
-not support them.
+`End` are unix seconds. The SDK does not check capabilities; on the sandbox
+runtime the service returns HTTP 501 `not_supported_by_runtime`
+(`IsNotSupportedError`).
 
 ## Concepts
 
@@ -471,5 +558,11 @@ if agentbox.IsNotFoundError(err) {
 `401` is `ErrorKindAuthentication` (for example, when the API key is
 invalid). `422` is `ErrorKindUnprocessable` (locked field / template
 mismatch). `410` is `ErrorKindGone` (template build logs reclaimed). `501`
-is `ErrorKindNotSupported` (template build APIs on a container Agent) and is
-not retried as a server error. See [Reference](https://docs.gmicloud.ai/api-reference/agentbox-sdk/reference).
+is `ErrorKindNotSupported` (template build APIs on a container Agent).
+`413`, `415`, `416` and `499` have their own kinds, and `507` is a server
+error with `IsInsufficientStorageError`. Connection, URL, redirect and
+stream-read failures are `*TransportError` (context cancellation and an
+oversize stream line are returned as is). A 3xx response that the HTTP client
+did not follow is an `*APIError` (its `Location` is not exposed), also with a
+custom `WithTransport`. The SDK never retries. See
+[Reference](reference.md).
