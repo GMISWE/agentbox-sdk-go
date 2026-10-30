@@ -1,5 +1,7 @@
 // Command shell opens an interactive shell in a sandbox over WebSocket.
 //
+// Beta: the shell API and its message protocol may change in a later release.
+//
 // The shell speaks JSON text frames: SendShellInput types into the shell, ResizeShell
 // sets the terminal size, RecvShellMessage returns status, stdout and error
 // messages. Output is raw terminal output (input echo, "\r\n", stderr merged);

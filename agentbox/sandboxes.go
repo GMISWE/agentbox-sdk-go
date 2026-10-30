@@ -181,10 +181,9 @@ func (s *Sandbox) SetTimeout(ctx context.Context, timeoutSeconds int) error {
 	return nil
 }
 
-// Pause pauses a running sandbox. It keeps disk files (except /tmp, which is
-// cleared on resume) but not memory or running processes, and stops consuming
-// run time. A paused sandbox that is not resumed by PausedExpireAt is
-// reclaimed together with its disk.
+// Pause pauses a running sandbox. It keeps disk files but not memory or
+// running processes, and stops consuming run time. A paused sandbox that is
+// not resumed by PausedExpireAt is reclaimed together with its disk.
 //
 // Pause is accepted asynchronously. On success Status is the upstream state
 // at acceptance, usually "pausing". Poll with Refresh until Status is
@@ -209,8 +208,8 @@ func (s *Sandbox) Pause(ctx context.Context) error {
 //
 // Resume is accepted asynchronously. On success Status is the upstream state
 // at acceptance, usually "resuming". Poll with WaitUntilRunning. It is a cold
-// start: disk files return except /tmp, processes are not restored, and the
-// start command is not re-run.
+// start: disk files return, processes are not restored, and the start command
+// is not re-run.
 func (s *Sandbox) Resume(ctx context.Context, params ResumeParams) error {
 	updated, err := s.client.Sandboxes.Resume(ctx, s.ID(), params)
 	if err != nil {
@@ -294,7 +293,8 @@ func (s *Sandbox) DownloadFile(ctx context.Context, sandboxPath string) (*FileDo
 	return s.client.Sandboxes.DownloadFile(ctx, s.ID(), sandboxPath)
 }
 
-// Shell opens an interactive WebSocket shell connection.
+// Beta: Shell opens an interactive WebSocket shell connection. The shell API
+// and its message protocol may change in a later release.
 func (s *Sandbox) Shell(ctx context.Context) (ShellConn, error) {
 	return s.client.Sandboxes.Shell(ctx, s.ID())
 }
@@ -542,10 +542,10 @@ func (sc *SandboxCollection) SetTimeout(ctx context.Context, sandboxID string, t
 
 // Pause pauses a running sandbox. See Sandbox.Pause.
 //
-// HTTP 202 means the pause was accepted. HTTP 400 means upstream rejected it
-// (message relayed). HTTP 409 task_not_running means the sandbox does not
-// exist yet or is not running. HTTP 422 sandbox_only_operation means the task
-// is not a sandbox.
+// HTTP 202 means the pause was accepted. HTTP 400 (no fixed code) means
+// upstream rejected the pause and the gateway relays its error. HTTP 409
+// task_not_running means the sandbox does not exist yet or is not running.
+// HTTP 422 sandbox_only_operation means the task is not a sandbox.
 func (sc *SandboxCollection) Pause(ctx context.Context, sandboxID string) (*SandboxPause, error) {
 	var payload struct {
 		TaskID string `json:"task_id"`
@@ -749,7 +749,8 @@ func (sc *SandboxCollection) DownloadFile(ctx context.Context, sandboxID, sandbo
 	return &FileDownload{Content: resp.Body, Filename: filename, Header: resp.Header}, nil
 }
 
-// Shell opens an interactive WebSocket shell connection for a Sandbox.
+// Beta: Shell opens an interactive WebSocket shell connection for a Sandbox.
+// The shell API and its message protocol may change in a later release.
 func (sc *SandboxCollection) Shell(ctx context.Context, sandboxID string) (ShellConn, error) {
 	fullURL := joinURL(sc.client.serviceURL, fmt.Sprintf("/tasks/%s/shell", sandboxID))
 	parsed, err := url.Parse(fullURL)

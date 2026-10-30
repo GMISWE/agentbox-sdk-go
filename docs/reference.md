@@ -22,7 +22,7 @@ func NewClient(opts ...Option) (*Client, error)
 | `WithTransport(t)` | internal default | Overrides the request/response transport (for testing) |
 | `WithStreamTransport(t)` | internal default | Overrides the streaming transport (for testing) |
 | `WithSleep(f)` | `time.Sleep` | Overrides the sleep function used by `WaitUntilRunning` polling |
-| `WithShellDialer(d)` | internal default | Overrides the shell WebSocket dialer (for testing) |
+| `WithShellDialer(d)` | internal default | **Beta**: overrides the shell WebSocket dialer (for testing); the shell API may change in a later release |
 
 `NewClient` trims whitespace from the API key and a trailing `/` from the base
 URL. The result is exposed as `Client.APIKey` and `Client.BaseURL`.
@@ -172,8 +172,12 @@ effective expiry — call `Refresh` and read `ExpiresAt`.
 [Snapshots](#snapshots)) instead of its template, sandbox runtime only.
 Sizing is inherited from the snapshot, so `InstanceType` is ignored, and the
 IDC must be the snapshot's (a different one is HTTP 422).
+The snapshot must be `ready`: launching any other status is HTTP 409
+`snapshot_not_ready` (`IsConflictError`), so call `snapshot.WaitUntilReady`
+first. Whether a launch right after `CreateSnapshot` is accepted depends on
+timing.
 
-| Status | Message | Meaning |
+| Status | Code | Meaning |
 |---|---|---|
 | 404 | `snapshot_not_found` | Unknown, another Agent's, or deleted snapshot |
 | 409 | `snapshot_not_ready` | The snapshot is not `ready` yet |
@@ -224,7 +228,7 @@ Logs are paged, not streamed.
 `waiting` or `building`, poll again from `NextOffset`. After the build
 reaches `ready` or `error`, read one last page from that offset.
 
-`410` (`IsGoneError`, message `build_logs_expired`) means the runtime
+`410` (`IsGoneError`, code `build_logs_expired`) means the runtime
 reclaimed the logs. Stop reading. That includes successful builds and is not
 a build failure. GMI does not persist these logs.
 
@@ -255,7 +259,7 @@ no longer auto-renewed. `timeoutSeconds` must be >= 60. Only a running or
 paused sandbox accepts it. `SandboxExpiry.ExpiresAt` is the upstream
 effective expiry.
 
-| Status | Message | Meaning |
+| Status | Code | Meaning |
 |---|---|---|
 | 400 | `invalid_timeout` | Lifetime is under 60 seconds or above the account maximum |
 | 409 | `task_not_running` | Sandbox is not running or paused |
@@ -264,16 +268,16 @@ effective expiry.
 #### `Pause(ctx, sandboxID string) (*SandboxPause, error)`
 
 Pauses a running sandbox. `POST /tasks/{id}/pause`, no body, HTTP 202. A
-pause keeps disk files (except `/tmp`, which is cleared on resume) but not
-memory or running processes, and stops consuming run time. A paused sandbox
-that is not resumed by `PausedExpireAt()` is reclaimed together with its disk.
+pause keeps disk files but not memory or running processes, and stops
+consuming run time. A paused sandbox that is not resumed by `PausedExpireAt()`
+is reclaimed together with its disk.
 
 `SandboxPause.State` is the upstream state at acceptance, usually `pausing`.
 Poll `Get` or `sandbox.Refresh` until `Status()` is `paused`.
 
-| Status | Message | Meaning |
+| Status | Code | Meaning |
 |---|---|---|
-| 400 | upstream message | Rejected upstream |
+| 400 | (upstream code, not fixed) | Upstream rejected the pause; the gateway relays its error |
 | 409 | `task_not_running` | The sandbox does not exist yet or is not running |
 | 422 | `sandbox_only_operation` | Task is not a sandbox |
 
@@ -285,11 +289,11 @@ unchanged. A non-nil value must be >= 60. It resets the run time and pins the
 expiry, the same as `SetTimeout`.
 
 `SandboxResume.State` is the upstream state at acceptance, usually `resuming`.
-Resume is a cold start: disk files return except `/tmp`, processes are not
-restored, and the start command is not re-run. Poll `Get` or
-`sandbox.WaitUntilRunning` until `running`.
+Resume is a cold start: disk files return, processes are not restored, and
+the start command is not re-run. Poll `Get` or `sandbox.WaitUntilRunning`
+until `running`.
 
-| Status | Message | Meaning |
+| Status | Code | Meaning |
 |---|---|---|
 | 400 | `invalid_timeout` | `timeout_seconds` is under 60 or above the account maximum |
 | 409 | `task_not_running` | The sandbox does not exist yet |
@@ -366,6 +370,8 @@ absolute and contain no `.` or `..` segment.
 
 #### `Shell(ctx, sandboxID string) (ShellConn, error)`
 
+**Beta**: the shell API and its message protocol may change in a later release.
+
 Opens an interactive shell over WebSocket at `{base}/tasks/{id}/shell`
 (`https` becomes `wss`, `http` becomes `ws`) with the Bearer header.
 Redirects are not followed. A handshake HTTP error returns `*APIError`
@@ -412,15 +418,21 @@ input rather than hand-built frames with `Send`. The helpers only use
 
 The shell runs as root with bash (`HOME=/root`). Reconnecting resumes the same
 session. Only one connection is active: a second attach receives `connected`
-then an `error` message. Running `exit` closes the shell, and later attaches
-are closed immediately, so call `Close` instead. See
-[usage.md](usage.md#shell).
+then an `error` message and gets no output. Running `exit` closes the shell,
+and later attaches are closed immediately, so call `Close` instead. See
+[usage.md](usage.md#shell-beta).
 
 A `ShellConn` allows one concurrent writer (`Send`, `SendShellInput`,
 `ResizeShell`) and one concurrent reader (`Recv`, `RecvShellMessage`); `Close`
 may be called from any goroutine to unblock a pending read.
 
-`WithShellDialer` replaces the dialer (testing hook).
+`WithShellDialer` replaces the dialer (testing hook). `ShellDialer` is the
+dialer function type.
+
+The `ShellConn`, `ShellMessage`, `ShellDialer`, `SendShellInput`,
+`ResizeShell`, `RecvShellMessage`, `DecodeShellMessage` and `WithShellDialer`
+items above are all Beta: the shell API and its message protocol may change in
+a later release.
 
 ### `Sandbox`
 
@@ -476,6 +488,8 @@ Same as `client.Sandboxes.CreateSnapshot`. The returned snapshot carries
 
 #### `sandbox.Shell(ctx) (ShellConn, error)`
 
+**Beta**: the shell API and its message protocol may change in a later release.
+
 Same as `client.Sandboxes.Shell`.
 
 #### `sandbox.Execute(ctx, command string, ExecuteParams) (*Execution, error)`
@@ -529,11 +543,14 @@ list.
 `POST /tasks/{id}/snapshots`, HTTP 201. Only a running sandbox can be saved.
 `CreateSnapshotParams.Name` empty omits the body; the API then names it
 `<sandbox display name or id>-<UTC yyyymmdd-hhmmss>`. A non-empty name is at
-most 255 characters. The snapshot starts `creating`. This form does not know
-the Agent slug, so `AgentSlug()` is empty; use `sandbox.CreateSnapshot` or
+most 255 characters. The returned `Snapshot` carries the status at creation
+time (`creating`) and is not refreshed: call `WaitUntilReady` before launching
+from it (launching a snapshot that is not `ready` is HTTP 409
+`snapshot_not_ready`). This form does not know the Agent slug, so
+`AgentSlug()` is empty; use `sandbox.CreateSnapshot` or
 `client.Agents.ListSnapshots` to poll it.
 
-| Status | Message | Meaning |
+| Status | Code | Meaning |
 |---|---|---|
 | 400 | `invalid_name` | Name over 255 characters |
 | 400 | `invalid_request` | Rejected upstream |
@@ -552,7 +569,7 @@ live from upstream. A snapshot that finished deleting is not listed. HTTP 422
 `PATCH /snapshots/{id}`. `name` is 1..255 characters. Only a `ready` or
 `error` snapshot can be renamed.
 
-| Status | Message | Meaning |
+| Status | Code | Meaning |
 |---|---|---|
 | 400 | `invalid_name` | Empty, over 255 characters, or rejected upstream |
 | 409 | `snapshot_not_settled` | Still `creating` or being deleted |
@@ -564,7 +581,7 @@ live from upstream. A snapshot that finished deleting is not listed. HTTP 422
 finishes, then disappears, or shows `delete_failed` (call `Delete` again to
 retry). No new sandbox can launch from it once deletion is accepted.
 
-| Status | Message | Meaning |
+| Status | Code | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Rejected upstream |
 | 409 | `snapshot_conflict` | Upstream refused, e.g. a dependency |
@@ -750,10 +767,24 @@ versions 413, 415, 416 and 499 were `ErrorKindGeneric`.
 The `Is*Error` helpers use `errors.As`, so they also match an `*APIError`
 wrapped with `fmt.Errorf("...: %w", err)`.
 
-`APIError` fields: `Kind`, `StatusCode`, `Message`, `Code`, `Details`. They
-come from the JSON body: `Message` from `error`, else `message`; `Code` from
-`code`; `Details` from `details`. A non-JSON body becomes the message as raw
-text.
+`APIError` fields: `Kind`, `StatusCode`, `Message`, `Code`, `Details`. The
+gateway body is `{"error": "<code>", "message": "<text>", ...}`:
+
+| Body | `Code` | `Message` |
+|---|---|---|
+| `code` present | `code` | `message`, else `error`, else `Request failed` |
+| `error` and `message` | `error` | `message` |
+| only `error` | `error` | `error` |
+| only `message` | empty | `message` |
+| not a JSON object | empty | `Request failed` |
+
+`Details` comes from `details`. Compare `apiErr.Code`, not `apiErr.Message`,
+with codes such as `snapshot_not_ready`. `Error()` returns
+`agentbox: <code>: <message> (status=N)`, or `agentbox: <message> (status=N)`
+when the code is empty or equals the message. Only non-empty strings count;
+other value types are ignored. Before v0.1.0-beta.8, `Message` held the
+`error` value and `Code` was set only from a `code` field, which the gateway
+does not send.
 
 ## Public exports
 
@@ -787,3 +818,8 @@ APIError, ErrorKind (+ ErrorKind* constants), Is*Error helpers
     IsRangeNotSatisfiableError, IsRequestCanceledError,
     IsInsufficientStorageError)
 ```
+
+The shell symbols (`WithShellDialer`, `ShellConn`, `ShellMessage`,
+`ShellDialer`, `SendShellInput`, `ResizeShell`, `RecvShellMessage`,
+`DecodeShellMessage`) are **Beta**: the shell API and its message protocol may
+change in a later release.

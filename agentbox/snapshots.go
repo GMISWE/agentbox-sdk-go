@@ -241,7 +241,10 @@ func (sc *SnapshotCollection) Delete(ctx context.Context, snapshotID string) (*S
 // Sandbox.CreateSnapshot. The returned Snapshot has no AgentSlug; use
 // Sandbox.CreateSnapshot or Agent.ListSnapshots to poll it.
 //
-// HTTP 201 means the snapshot was created with status "creating". HTTP 400
+// HTTP 201 means the snapshot was created with status "creating"; the
+// returned Snapshot carries that status and is not refreshed. Call
+// Snapshot.WaitUntilReady before launching from it (a launch with a snapshot
+// that is not ready is HTTP 409 snapshot_not_ready). HTTP 400
 // invalid_name means the name is over 255 characters. HTTP 403 means the
 // caller is neither the sandbox's creator nor an org owner. HTTP 409
 // task_not_running means the sandbox does not exist yet; snapshot_conflict
@@ -264,7 +267,8 @@ func (sc *SandboxCollection) CreateSnapshot(ctx context.Context, sandboxID strin
 
 // CreateSnapshot saves this running Sandbox as a durable snapshot that new
 // sandboxes of the same Agent can launch from. Creation is asynchronous: the
-// snapshot starts "creating". Poll with Snapshot.WaitUntilReady.
+// snapshot starts "creating" and the returned Snapshot is not refreshed. Call
+// Snapshot.WaitUntilReady before launching from it.
 func (s *Sandbox) CreateSnapshot(ctx context.Context, params CreateSnapshotParams) (*Snapshot, error) {
 	snapshot, err := s.client.Sandboxes.CreateSnapshot(ctx, s.ID(), params)
 	if err != nil {
