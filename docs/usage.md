@@ -235,12 +235,11 @@ page, err := client.Sandboxes.List(ctx, agentbox.SandboxListParams{
 extend the remaining lifetime, and it pins the sandbox so later reads do not
 auto-renew it.
 
-`Pause` pauses a running sandbox. Disk files are kept (except `/tmp`, which
-is cleared on resume); memory and running processes are not. A paused sandbox
-stops consuming run time. The call returns when the pause is accepted;
-`Status()` is usually `pausing`. Poll with `Refresh` until it is `paused`.
-`PausedExpireAt()` is the deadline to resume before the sandbox and its disk
-are reclaimed.
+`Pause` pauses a running sandbox. Disk files are kept; memory and running
+processes are not. A paused sandbox stops consuming run time. The call
+returns when the pause is accepted; `Status()` is usually `pausing`. Poll with
+`Refresh` until it is `paused`. `PausedExpireAt()` is the deadline to resume
+before the sandbox and its disk are reclaimed.
 
 ```go
 err = sandbox.Pause(ctx)
@@ -257,8 +256,7 @@ fmt.Println(sandbox.PausedExpireAt())
 that was left at pause. Set it (>= 60) to reset that run time and pin the
 expiry. The call returns when the resume is accepted; `Status()` is usually
 `resuming`. Poll with `WaitUntilRunning`. Resume is a cold start: disk files
-come back except `/tmp`, processes are not restored, and the start command is
-not re-run.
+come back, processes are not restored, and the start command is not re-run.
 
 ```go
 err = sandbox.Resume(ctx, agentbox.ResumeParams{})
@@ -271,9 +269,12 @@ err = sandbox.Resume(ctx, agentbox.ResumeParams{TimeoutSeconds: &timeoutSeconds}
 ## Snapshots
 
 A snapshot saves a running sandbox so new sandboxes of the same Agent can
-start from it. Creation is asynchronous: the snapshot starts `creating`; wait
-for `ready`. Launching from a snapshot inherits its sizing and IDC, so
-`InstanceType` is ignored.
+start from it. Creation is asynchronous: `CreateSnapshot` returns the status at
+creation time (`creating`) and the object is not refreshed, so call
+`WaitUntilReady` before launching. Launching a snapshot that is not `ready` is
+HTTP 409 `snapshot_not_ready` (`IsConflictError`); whether a launch right after
+create is accepted depends on timing. Launching from a snapshot inherits its
+sizing and IDC, so `InstanceType` is ignored.
 
 ```go
 snapshot, err := sandbox.CreateSnapshot(ctx, agentbox.CreateSnapshotParams{Name: "base"})
@@ -319,7 +320,9 @@ values from 1 through 25 and is ignored when `Wait` is false. File paths (upload
 and download) are percent-decoded, then must be absolute and cannot contain `.`
 or `..` segments.
 
-## Shell
+## Shell (Beta)
+
+**Beta**: the shell API and its message protocol may change in a later release.
 
 ```go
 conn, err := sandbox.Shell(ctx)
@@ -386,6 +389,7 @@ undecoded.
 - Latency is not guaranteed; do not depend on timing.
 - A connection supports one writer goroutine and one reader goroutine at a
   time; do not call `SendShellInput`, `ResizeShell` or `Send` concurrently.
+  `Close` may be called from any goroutine to unblock a pending read.
 
 ## List and filter sandboxes
 
@@ -548,12 +552,20 @@ runtime the service returns HTTP 501 `not_supported_by_runtime`
 agent, err := client.Agents.Get(ctx, "missing")
 var apiErr *agentbox.APIError
 if errors.As(err, &apiErr) {
-	fmt.Println(apiErr.StatusCode, apiErr.Message)
+	fmt.Println(apiErr.StatusCode, apiErr.Code, apiErr.Message)
 }
 if agentbox.IsNotFoundError(err) {
 	// handle 404
 }
 ```
+
+`APIError.Code` is the gateway's `error` value (for example
+`snapshot_not_ready`) and `Message` is its human text; compare `apiErr.Code`,
+not `apiErr.Message`, with a code. With a body that has only `error`, both hold
+that value. `Error()` reads `agentbox: <code>: <message> (status=N)`, or
+`agentbox: <message> (status=N)` when the code is empty or equals the message.
+Before v0.1.0-beta.8, `Message` held the `error` value and `Code` was set only
+from a `code` field, which the gateway does not send.
 
 `401` is `ErrorKindAuthentication` (for example, when the API key is
 invalid). `422` is `ErrorKindUnprocessable` (locked field / template

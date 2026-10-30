@@ -23,7 +23,7 @@ go run ./examples/quickstart
 | [snapshot-pool](snapshot-pool) | Prepare one sandbox, snapshot it, launch several from the snapshot in parallel (`POOL_SIZE`, default 5) |
 | [labels-and-cleanup](labels-and-cleanup) | Label sandboxes with metadata, find them by label, extend a lifetime, delete exactly what a run created |
 | [pause-resume](pause-resume) | Pause and resume: what survives (home directory) and what does not (`/tmp`, processes) |
-| [shell](shell) | Interactive shell over WebSocket: wait for `connected`, `ResizeShell`, `SendShellInput`, read `stdout` messages, reconnect and find the same session |
+| [shell](shell) | Interactive shell over WebSocket (Beta): wait for `connected`, `ResizeShell`, `SendShellInput`, read `stdout` messages, reconnect and find the same session |
 | [onboarding-smoke](onboarding-smoke) | Acceptance check after onboarding an organization: eligibility lists the data center, an Agent builds, a sandbox starts. Run with a key of the organization under test |
 
 All examples except `quickstart` share the setup in

@@ -128,7 +128,8 @@ type LaunchParams struct {
 	// the IDC must be the snapshot's; with SandboxCollection.Launch, IdcName
 	// may be left empty to use it. HTTP 404 snapshot_not_found means it is
 	// unknown, another Agent's or deleted; HTTP 409 snapshot_not_ready means it
-	// is not ready yet.
+	// is not ready yet (a launch right after CreateSnapshot may or may not be
+	// accepted, depending on timing).
 	SnapshotID string
 }
 
