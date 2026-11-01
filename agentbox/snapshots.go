@@ -209,7 +209,7 @@ func (sc *SnapshotCollection) Rename(ctx context.Context, snapshotID, name strin
 	var payload struct {
 		Snapshot map[string]any `json:"snapshot"`
 	}
-	err := sc.client.request(ctx, http.MethodPatch, fmt.Sprintf("/snapshots/%s", snapshotID), nil, map[string]any{
+	err := sc.client.request(ctx, http.MethodPatch, fmt.Sprintf("/snapshots/%s", pathSeg(snapshotID)), nil, map[string]any{
 		"name": name,
 	}, nil, &payload)
 	if err != nil {
@@ -230,7 +230,7 @@ func (sc *SnapshotCollection) Delete(ctx context.Context, snapshotID string) (*S
 		SnapshotID string `json:"snapshot_id"`
 		Status     string `json:"status"`
 	}
-	err := sc.client.request(ctx, http.MethodDelete, fmt.Sprintf("/snapshots/%s", snapshotID), nil, nil, nil, &payload)
+	err := sc.client.request(ctx, http.MethodDelete, fmt.Sprintf("/snapshots/%s", pathSeg(snapshotID)), nil, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +258,7 @@ func (sc *SandboxCollection) CreateSnapshot(ctx context.Context, sandboxID strin
 	var payload struct {
 		Snapshot map[string]any `json:"snapshot"`
 	}
-	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/snapshots", sandboxID), nil, body, nil, &payload)
+	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/snapshots", pathSeg(sandboxID)), nil, body, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +287,7 @@ func (a *AgentCollection) ListSnapshots(ctx context.Context, slug string) ([]*Sn
 	var payload struct {
 		Snapshots []map[string]any `json:"snapshots"`
 	}
-	err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s/snapshots", slug), nil, nil, nil, &payload)
+	err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s/snapshots", pathSeg(slug)), nil, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
