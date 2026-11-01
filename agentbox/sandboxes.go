@@ -382,7 +382,7 @@ func (sc *SandboxCollection) launch(ctx context.Context, slug string, params Lau
 		ContainerID string `json:"container_id"`
 		Status      string `json:"status"`
 	}
-	if err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/deployments/%s/tasks", slug), nil, body, nil, &payload); err != nil {
+	if err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/deployments/%s/tasks", pathSeg(slug)), nil, body, nil, &payload); err != nil {
 		return nil, err
 	}
 
@@ -500,7 +500,7 @@ func (sc *SandboxCollection) List(ctx context.Context, params SandboxListParams)
 // Get retrieves a Sandbox by ID.
 func (sc *SandboxCollection) Get(ctx context.Context, sandboxID string) (*Sandbox, error) {
 	var payload map[string]any
-	if err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s", sandboxID), nil, nil, nil, &payload); err != nil {
+	if err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s", pathSeg(sandboxID)), nil, nil, nil, &payload); err != nil {
 		return nil, err
 	}
 	return &Sandbox{client: sc.client, Data: payload}, nil
@@ -509,7 +509,7 @@ func (sc *SandboxCollection) Get(ctx context.Context, sandboxID string) (*Sandbo
 // Delete deletes a Sandbox by ID. This is one-way; the sandbox cannot be
 // restarted.
 func (sc *SandboxCollection) Delete(ctx context.Context, sandboxID string) error {
-	return sc.client.request(ctx, http.MethodDelete, fmt.Sprintf("/tasks/%s", sandboxID), nil, nil, nil, nil)
+	return sc.client.request(ctx, http.MethodDelete, fmt.Sprintf("/tasks/%s", pathSeg(sandboxID)), nil, nil, nil, nil)
 }
 
 // SetTimeout resets a sandbox's lifetime to now + timeoutSeconds and pins it,
@@ -527,7 +527,7 @@ func (sc *SandboxCollection) SetTimeout(ctx context.Context, sandboxID string, t
 		ExpiresAt    string `json:"expires_at"`
 		ExpiryPinned bool   `json:"expiry_pinned"`
 	}
-	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/timeout", sandboxID), nil, map[string]any{
+	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/timeout", pathSeg(sandboxID)), nil, map[string]any{
 		"timeout_seconds": timeoutSeconds,
 	}, nil, &payload)
 	if err != nil {
@@ -551,7 +551,7 @@ func (sc *SandboxCollection) Pause(ctx context.Context, sandboxID string) (*Sand
 		TaskID string `json:"task_id"`
 		State  string `json:"state"`
 	}
-	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/pause", sandboxID), nil, nil, nil, &payload)
+	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/pause", pathSeg(sandboxID)), nil, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -575,7 +575,7 @@ func (sc *SandboxCollection) Resume(ctx context.Context, sandboxID string, param
 		State        string `json:"state"`
 		ExpiryPinned bool   `json:"expiry_pinned"`
 	}
-	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/resume", sandboxID), nil, body, nil, &payload)
+	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/resume", pathSeg(sandboxID)), nil, body, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -590,7 +590,7 @@ func (sc *SandboxCollection) Resume(ctx context.Context, sandboxID string, param
 // unix seconds. Step defaults on the API to 60s (min 5, max 3600).
 func (sc *SandboxCollection) Metrics(ctx context.Context, sandboxID string, params MetricsParams) (*MetricsBatch, error) {
 	var payload map[string]any
-	err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/metrics", sandboxID), compact(map[string]any{
+	err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/metrics", pathSeg(sandboxID)), compact(map[string]any{
 		"kinds": nonEmptyString(kindsQuery(params.Kinds)),
 		"start": params.Start,
 		"end":   params.End,
@@ -614,7 +614,7 @@ func (sc *SandboxCollection) Metrics(ctx context.Context, sandboxID string, para
 // net_tx.
 func (sc *SandboxCollection) MetricsTimeseries(ctx context.Context, sandboxID string, params MetricsTimeseriesParams) (*MetricSeries, error) {
 	var payload map[string]any
-	err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/metrics/timeseries", sandboxID), compact(map[string]any{
+	err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/metrics/timeseries", pathSeg(sandboxID)), compact(map[string]any{
 		"kind":  params.Kind,
 		"start": params.Start,
 		"end":   params.End,
@@ -629,7 +629,7 @@ func (sc *SandboxCollection) MetricsTimeseries(ctx context.Context, sandboxID st
 // Stream opens a Server-Sent Events stream of Sandbox status/log events.
 // 4xx/5xx responses return the same *APIError types as other calls.
 func (sc *SandboxCollection) Stream(ctx context.Context, sandboxID string) (*Stream, error) {
-	return sc.client.stream(ctx, fmt.Sprintf("/tasks/%s/stream", sandboxID))
+	return sc.client.stream(ctx, fmt.Sprintf("/tasks/%s/stream", pathSeg(sandboxID)))
 }
 
 // ExecuteParams configures SandboxCollection.Execute.
@@ -654,7 +654,7 @@ func (sc *SandboxCollection) Execute(ctx context.Context, sandboxID, command str
 		body["wait_timeout_seconds"] = *params.WaitTimeoutSeconds
 	}
 
-	resp, err := sc.client.requestRaw(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/executions", sandboxID), nil, body, nil)
+	resp, err := sc.client.requestRaw(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/executions", pathSeg(sandboxID)), nil, body, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -668,7 +668,7 @@ func (sc *SandboxCollection) Execute(ctx context.Context, sandboxID, command str
 // GetExecution retrieves the latest state of an execution.
 func (sc *SandboxCollection) GetExecution(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
 	var payload map[string]any
-	err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/executions/%s", sandboxID, executionID), nil, nil, nil, &payload)
+	err := sc.client.request(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/executions/%s", pathSeg(sandboxID), pathSeg(executionID)), nil, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -677,7 +677,7 @@ func (sc *SandboxCollection) GetExecution(ctx context.Context, sandboxID, execut
 
 // CancelExecution requests cancellation of an execution.
 func (sc *SandboxCollection) CancelExecution(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
-	resp, err := sc.client.requestRaw(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/executions/%s/cancel", sandboxID, executionID), nil, nil, nil)
+	resp, err := sc.client.requestRaw(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/executions/%s/cancel", pathSeg(sandboxID), pathSeg(executionID)), nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -715,7 +715,7 @@ func (sc *SandboxCollection) UploadFile(ctx context.Context, sandboxID, sandboxP
 	headers.Set("Content-Type", writer.FormDataContentType())
 
 	var payload []map[string]any
-	err = sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/files", sandboxID),
+	err = sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/files", pathSeg(sandboxID)),
 		map[string]any{"path": sandboxPath}, buf.Bytes(), headers, &payload)
 	if err != nil {
 		return nil, err
@@ -728,7 +728,7 @@ func (sc *SandboxCollection) DownloadFile(ctx context.Context, sandboxID, sandbo
 	if err := validateSandboxPath(sandboxPath); err != nil {
 		return nil, err
 	}
-	resp, err := sc.client.requestRaw(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/files", sandboxID),
+	resp, err := sc.client.requestRaw(ctx, http.MethodGet, fmt.Sprintf("/tasks/%s/files", pathSeg(sandboxID)),
 		map[string]any{"path": sandboxPath}, nil, nil)
 	if err != nil {
 		return nil, err
@@ -751,7 +751,7 @@ func (sc *SandboxCollection) DownloadFile(ctx context.Context, sandboxID, sandbo
 
 // Shell opens an interactive WebSocket shell connection for a Sandbox.
 func (sc *SandboxCollection) Shell(ctx context.Context, sandboxID string) (ShellConn, error) {
-	fullURL := joinURL(sc.client.serviceURL, fmt.Sprintf("/tasks/%s/shell", sandboxID))
+	fullURL := joinURL(sc.client.serviceURL, fmt.Sprintf("/tasks/%s/shell", pathSeg(sandboxID)))
 	parsed, err := url.Parse(fullURL)
 	if err != nil {
 		return nil, fmt.Errorf("agentbox: parse shell url: %w", err)

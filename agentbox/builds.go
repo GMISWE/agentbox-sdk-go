@@ -83,7 +83,7 @@ func (a *AgentCollection) ListBuilds(ctx context.Context, slug string) ([]Templa
 	var payload struct {
 		Builds []TemplateBuild `json:"builds"`
 	}
-	err := a.client.request(ctx, http.MethodGet, "/deployments/"+slug+"/builds", nil, nil, nil, &payload)
+	err := a.client.request(ctx, http.MethodGet, "/deployments/"+pathSeg(slug)+"/builds", nil, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (a *AgentCollection) ListBuilds(ctx context.Context, slug string) ([]Templa
 // GetBuild returns one template build for a deployment slug.
 func (a *AgentCollection) GetBuild(ctx context.Context, slug, buildID string) (TemplateBuild, error) {
 	var build TemplateBuild
-	err := a.client.request(ctx, http.MethodGet, "/deployments/"+slug+"/builds/"+buildID, nil, nil, nil, &build)
+	err := a.client.request(ctx, http.MethodGet, "/deployments/"+pathSeg(slug)+"/builds/"+pathSeg(buildID), nil, nil, nil, &build)
 	if err != nil {
 		return TemplateBuild{}, err
 	}
@@ -107,7 +107,7 @@ func (a *AgentCollection) GetBuild(ctx context.Context, slug, buildID string) (T
 // See Agent.BuildLogs.
 func (a *AgentCollection) BuildLogs(ctx context.Context, slug, buildID string, params BuildLogParams) (BuildLogPage, error) {
 	var page BuildLogPage
-	err := a.client.request(ctx, http.MethodGet, "/deployments/"+slug+"/builds/"+buildID+"/logs", buildLogQuery(params), nil, nil, &page)
+	err := a.client.request(ctx, http.MethodGet, "/deployments/"+pathSeg(slug)+"/builds/"+pathSeg(buildID)+"/logs", buildLogQuery(params), nil, nil, &page)
 	if err != nil {
 		return BuildLogPage{}, err
 	}
