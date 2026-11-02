@@ -79,7 +79,9 @@ const (
 )
 
 // APIError means the server rejected a request. Kind distinguishes the
-// specific status-derived variant (see the Is*Error helpers below).
+// specific status-derived variant (see the Is*Error helpers below). Code is
+// the gateway's machine-readable error value (for example
+// snapshot_not_ready) and Message is its human-readable text.
 type APIError struct {
 	Kind       ErrorKind
 	StatusCode int
@@ -89,6 +91,9 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	if e.Code != "" && e.Code != e.Message {
+		return fmt.Sprintf("agentbox: %s: %s (status=%d)", e.Code, e.Message, e.StatusCode)
+	}
 	return fmt.Sprintf("agentbox: %s (status=%d)", e.Message, e.StatusCode)
 }
 
@@ -194,29 +199,38 @@ func errorKindForStatus(statusCode int) ErrorKind {
 }
 
 // errorFromBody maps an error response body: a JSON body goes through
-// errorFromResponse, anything else becomes the message as raw text.
+// errorFromResponse, anything else (plain text, empty) yields "Request failed".
 func errorFromBody(statusCode int, body []byte) error {
 	if payload := jsonLoads(body); payload != nil {
 		return errorFromResponse(statusCode, payload)
 	}
-	return errorFromResponse(statusCode, string(body))
+	return errorFromResponse(statusCode, nil)
 }
 
-// errorFromResponse maps API `{error}` payloads (and message/code variants)
-// to an *APIError, mirroring the Python SDK's error_from_response.
+// errorFromResponse maps gateway error bodies to an *APIError, mirroring the
+// Python SDK's error_from_response. The gateway body is
+// {"error": "<code>", "message": "<text>", ...}: error becomes Code and
+// message the human text. A body with its own code keeps that code. With only
+// error, Code and Message are both that value. Only non-empty strings count;
+// other value types are ignored.
 func errorFromResponse(statusCode int, payload any) error {
 	message := "Request failed"
 	var code string
 	var details map[string]any
 
 	if m, ok := payload.(map[string]any); ok {
-		if v, ok := m["error"].(string); ok && v != "" {
-			message = v
-		} else if v, ok := m["message"].(string); ok && v != "" {
-			message = v
-		}
-		if v, ok := m["code"].(string); ok {
-			code = v
+		rawCode, _ := m["code"].(string)
+		rawError, _ := m["error"].(string)
+		rawMessage, _ := m["message"].(string)
+		switch {
+		case rawCode != "":
+			code = rawCode
+			message = firstNonEmpty(rawMessage, rawError, message)
+		case rawError != "":
+			code = rawError
+			message = firstNonEmpty(rawMessage, rawError)
+		default:
+			message = firstNonEmpty(rawMessage, message)
 		}
 		if v, ok := m["details"].(map[string]any); ok {
 			details = v
@@ -230,4 +244,13 @@ func errorFromResponse(statusCode int, payload any) error {
 		Code:       code,
 		Details:    details,
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

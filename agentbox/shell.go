@@ -10,7 +10,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// ShellMessage is one message received from the shell service.
+// Beta: ShellMessage is one message received from the shell service. The
+// shell API and its message protocol may change in a later release.
 //
 // Known Type values:
 //
@@ -29,7 +30,8 @@ type ShellMessage struct {
 	Message string `json:"message,omitempty"`
 }
 
-// ShellConn is an interactive Sandbox shell connection.
+// Beta: ShellConn is an interactive Sandbox shell connection. The shell API
+// and its message protocol may change in a later release.
 //
 // The service speaks TEXT frames carrying a JSON envelope; raw text, binary
 // frames and unknown message types are silently ignored. Use SendShellInput,
@@ -56,8 +58,9 @@ func sendShellJSON(conn ShellConn, v any) error {
 	return conn.Send(string(data))
 }
 
-// SendShellInput writes {"type":"stdin","data":data} with conn.Send. data is
-// typed into the shell as is, so end a command with "\n".
+// Beta: SendShellInput writes {"type":"stdin","data":data} with conn.Send.
+// data is typed into the shell as is, so end a command with "\n". The shell
+// API may change in a later release.
 func SendShellInput(conn ShellConn, data string) error {
 	return sendShellJSON(conn, struct {
 		Type string `json:"type"`
@@ -65,9 +68,9 @@ func SendShellInput(conn ShellConn, data string) error {
 	}{"stdin", data})
 }
 
-// ResizeShell writes {"type":"resize","cols":cols,"rows":rows} with
+// Beta: ResizeShell writes {"type":"resize","cols":cols,"rows":rows} with
 // conn.Send. It returns an error without sending when cols or rows is not
-// positive.
+// positive. The shell API may change in a later release.
 func ResizeShell(conn ShellConn, cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return fmt.Errorf("agentbox: shell size must be positive, got cols=%d rows=%d", cols, rows)
@@ -79,8 +82,8 @@ func ResizeShell(conn ShellConn, cols, rows int) error {
 	}{"resize", cols, rows})
 }
 
-// RecvShellMessage reads the next text frame with conn.Recv and decodes it
-// with DecodeShellMessage.
+// Beta: RecvShellMessage reads the next text frame with conn.Recv and decodes
+// it with DecodeShellMessage. The shell API may change in a later release.
 func RecvShellMessage(conn ShellConn) (ShellMessage, error) {
 	text, err := conn.Recv()
 	if err != nil {
@@ -89,9 +92,10 @@ func RecvShellMessage(conn ShellConn) (ShellMessage, error) {
 	return DecodeShellMessage(text), nil
 }
 
-// DecodeShellMessage decodes one text frame. A JSON object with a non-empty
-// "type" is decoded; anything else (plain text, "null", arrays, objects
-// without a type) yields Type "" with Data set to the raw text.
+// Beta: DecodeShellMessage decodes one text frame. A JSON object with a
+// non-empty "type" is decoded; anything else (plain text, "null", arrays,
+// objects without a type) yields Type "" with Data set to the raw text. The
+// shell API may change in a later release.
 func DecodeShellMessage(text string) ShellMessage {
 	var m ShellMessage
 	if err := json.Unmarshal([]byte(text), &m); err != nil || m.Type == "" {
@@ -100,7 +104,8 @@ func DecodeShellMessage(text string) ShellMessage {
 	return m
 }
 
-// ShellDialer opens an authenticated shell WebSocket connection.
+// Beta: ShellDialer opens an authenticated shell WebSocket connection. The
+// shell API may change in a later release.
 type ShellDialer func(ctx context.Context, wsURL string, headers http.Header) (ShellConn, error)
 
 type wsShellConn struct {

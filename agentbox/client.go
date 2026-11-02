@@ -93,7 +93,8 @@ func WithStreamTransport(transport StreamTransport) Option {
 	return func(c *Client) { c.streamTransport = transport }
 }
 
-// WithShellDialer overrides the WebSocket shell dialer (for testing).
+// Beta: WithShellDialer overrides the WebSocket shell dialer (for testing).
+// The shell API may change in a later release.
 func WithShellDialer(dialer ShellDialer) Option {
 	return func(c *Client) { c.shellDialer = dialer }
 }
