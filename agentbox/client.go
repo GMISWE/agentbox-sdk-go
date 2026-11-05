@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -47,6 +48,7 @@ type Client struct {
 
 	httpClient      *http.Client
 	transport       Transport
+	customTransport bool
 	streamTransport StreamTransport
 	shellDialer     ShellDialer
 	sleep           func(time.Duration)
@@ -85,7 +87,10 @@ func WithHTTPClient(httpClient *http.Client) Option {
 
 // WithTransport overrides the request/response transport (for testing).
 func WithTransport(transport Transport) Option {
-	return func(c *Client) { c.transport = transport }
+	return func(c *Client) {
+		c.transport = transport
+		c.customTransport = transport != nil
+	}
 }
 
 // WithStreamTransport overrides the streaming transport (for testing).
@@ -273,6 +278,36 @@ func (c *Client) requestRaw(ctx context.Context, method, path string, params map
 		return nil, errorFromBody(resp.StatusCode, resp.Body)
 	}
 	return resp, nil
+}
+
+func (c *Client) requestReader(ctx context.Context, method, path string, params map[string]any, body io.Reader, extraHeaders http.Header, result any) error {
+	fullURL := joinURL(c.serviceURL, path)
+	if len(params) > 0 {
+		fullURL = queryURL(fullURL, params)
+	}
+
+	headers := c.authHeaders(extraHeaders)
+	var resp *RawResponse
+	var err error
+	if c.customTransport {
+		encodedBody, readErr := io.ReadAll(body)
+		if readErr != nil {
+			return readErr
+		}
+		resp, err = c.transport(ctx, method, fullURL, headers, encodedBody)
+	} else {
+		resp, err = doRequest(c.httpClient, ctx, method, fullURL, headers, body)
+	}
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 300 {
+		return errorFromBody(resp.StatusCode, resp.Body)
+	}
+	if result == nil || len(resp.Body) == 0 {
+		return nil
+	}
+	return json.Unmarshal(resp.Body, result)
 }
 
 func (c *Client) authHeaders(extra http.Header) http.Header {

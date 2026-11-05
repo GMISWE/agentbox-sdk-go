@@ -100,31 +100,35 @@ func defaultTransport(httpClient *http.Client) Transport {
 		if body != nil {
 			bodyReader = bytes.NewReader(body)
 		}
-		req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
-		if err != nil {
-			return nil, newTransportError(err)
-		}
-		req.Header = headers.Clone()
-
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			return nil, newTransportError(err)
-		}
-		defer func() {
-			_ = resp.Body.Close()
-		}()
-
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, newTransportError(err)
-		}
-
-		return &RawResponse{
-			StatusCode: resp.StatusCode,
-			Header:     resp.Header,
-			Body:       respBody,
-		}, nil
+		return doRequest(httpClient, ctx, method, url, headers, bodyReader)
 	}
+}
+
+func doRequest(httpClient *http.Client, ctx context.Context, method, url string, headers http.Header, body io.Reader) (*RawResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, newTransportError(err)
+	}
+	req.Header = headers.Clone()
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, newTransportError(err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, newTransportError(err)
+	}
+
+	return &RawResponse{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header,
+		Body:       respBody,
+	}, nil
 }
 
 func defaultStreamTransport(httpClient *http.Client) StreamTransport {
