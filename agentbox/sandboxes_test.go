@@ -1,12 +1,134 @@
 package agentbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestUploadFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/tasks/task-1/files" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.URL.Query().Get("path"); got != "/tmp/input.txt" {
+			t.Errorf("path = %q", got)
+		}
+
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer func() { _ = file.Close() }()
+		content, err := io.ReadAll(file)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if header.Filename != "input.txt" || string(content) != "hello\n" {
+			t.Errorf("file = %q %q", header.Filename, content)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[{"path":"/tmp/input.txt"}]`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	files, err := client.Sandboxes.UploadFile(context.Background(), "task-1", "/tmp/input.txt", "input.txt", strings.NewReader("hello\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || stringField(files[0], "path") != "/tmp/input.txt" {
+		t.Fatalf("files = %#v", files)
+	}
+}
+
+func TestUploadFileUsesCustomTransport(t *testing.T) {
+	called := false
+	transport := func(_ context.Context, method, rawURL string, headers http.Header, body []byte) (*RawResponse, error) {
+		called = true
+		if method != http.MethodPost || !hasSuffix(rawURL, "/tasks/task-1/files") {
+			t.Fatalf("request = %s %s", method, rawURL)
+		}
+		if headers.Get("Content-Type") == "" || !bytes.Contains(body, []byte("hello\n")) {
+			t.Fatalf("content type = %q, body = %q", headers.Get("Content-Type"), body)
+		}
+		return &RawResponse{StatusCode: http.StatusOK, Body: []byte(`[]`)}, nil
+	}
+	client := newTestClient(t, "https://example.test", WithTransport(transport))
+
+	if _, err := client.Sandboxes.UploadFile(context.Background(), "task-1", "/tmp/input.txt", "input.txt", strings.NewReader("hello\n")); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("custom transport was not called")
+	}
+}
+
+func TestUploadFileRedirectIsNotReplayed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/target" {
+			t.Error("upload was replayed after redirect")
+			return
+		}
+		http.Redirect(w, r, "/target", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Sandboxes.UploadFile(context.Background(), "task-1", "/tmp/input.txt", "input.txt", strings.NewReader("hello\n"))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestUploadFileCancellation(t *testing.T) {
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	reader, writer := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Sandboxes.UploadFile(ctx, "task-1", "/tmp/input.txt", "input.txt", reader)
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		_ = writer.Close()
+		t.Fatal("upload request did not start while the input was still open")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		_ = writer.Close()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v", err)
+		}
+	case <-time.After(time.Second):
+		_ = writer.Close()
+		<-done
+		t.Fatal("UploadFile did not return after context cancellation")
+	}
+}
 
 func TestLaunchMetadataAndTimeout(t *testing.T) {
 	var calls []struct {

@@ -1,7 +1,6 @@
 package agentbox
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -689,7 +688,9 @@ func (sc *SandboxCollection) CancelExecution(ctx context.Context, sandboxID, exe
 }
 
 // UploadFile uploads content to an absolute Sandbox path. filename is used
-// as the multipart form filename (e.g. path.Base(sandboxPath)).
+// as the multipart form filename (e.g. path.Base(sandboxPath)). With the
+// default transport, the streamed request body cannot be replayed, so HTTP
+// 307 and 308 redirects are returned as *APIError instead of being followed.
 func (sc *SandboxCollection) UploadFile(ctx context.Context, sandboxID, sandboxPath, filename string, content io.Reader) ([]map[string]any, error) {
 	if err := validateSandboxPath(sandboxPath); err != nil {
 		return nil, err
@@ -698,26 +699,45 @@ func (sc *SandboxCollection) UploadFile(ctx context.Context, sandboxID, sandboxP
 		filename = path.Base(sandboxPath)
 	}
 
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-	part, err := writer.CreateFormFile("file", filename)
-	if err != nil {
-		return nil, fmt.Errorf("agentbox: build upload body: %w", err)
-	}
-	if _, err := io.Copy(part, content); err != nil {
-		return nil, fmt.Errorf("agentbox: read upload content: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("agentbox: build upload body: %w", err)
-	}
+	reader, writer := io.Pipe()
+	multipartWriter := multipart.NewWriter(writer)
+	contentType := multipartWriter.FormDataContentType()
+	writeDone := make(chan error, 1)
+	go func() {
+		part, err := multipartWriter.CreateFormFile("file", filename)
+		if err != nil {
+			err = fmt.Errorf("agentbox: build upload body: %w", err)
+		} else if _, err = io.Copy(part, content); err != nil {
+			err = fmt.Errorf("agentbox: read upload content: %w", err)
+		} else if err = multipartWriter.Close(); err != nil {
+			err = fmt.Errorf("agentbox: build upload body: %w", err)
+		}
+		writeDone <- err
+		_ = writer.CloseWithError(err)
+	}()
 
 	headers := http.Header{}
-	headers.Set("Content-Type", writer.FormDataContentType())
+	headers.Set("Content-Type", contentType)
 
 	var payload []map[string]any
-	err = sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/files", sandboxID),
-		map[string]any{"path": sandboxPath}, buf.Bytes(), headers, &payload)
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = reader.CloseWithError(ctx.Err())
+	})
+	err := sc.client.requestReader(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/files", sandboxID),
+		map[string]any{"path": sandboxPath}, reader, headers, &payload)
+	stopCancel()
+	_ = reader.Close()
 	if err != nil {
+		select {
+		case writeErr := <-writeDone:
+			if writeErr != nil {
+				return nil, writeErr
+			}
+		default:
+		}
+		return nil, err
+	}
+	if err := <-writeDone; err != nil {
 		return nil, err
 	}
 	return payload, nil

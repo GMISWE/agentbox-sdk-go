@@ -19,7 +19,7 @@ func NewClient(opts ...Option) (*Client, error)
 | `WithBaseURL(url)` | `GMI_AGENTBOX_BASE_URL` or `DefaultBaseURL` | Optional API root, including the path prefix. Production root if unset |
 | `WithTimeout(d)` | `30 * time.Second` | Timeout of the default request client only. It does not apply to a client from `WithHTTPClient` or to streams (streams have no timeout; use the context) |
 | `WithHTTPClient(c)` | internal default | Overrides the `*http.Client` used by the default request transport (not streams). See redirect policy below |
-| `WithTransport(t)` | internal default | Overrides the request/response transport (for testing) |
+| `WithTransport(t)` | internal default | Overrides the request/response transport (for testing); file uploads are buffered before calling it |
 | `WithStreamTransport(t)` | internal default | Overrides the streaming transport (for testing) |
 | `WithSleep(f)` | `time.Sleep` | Overrides the sleep function used by `WaitUntilRunning` polling |
 | `WithShellDialer(d)` | internal default | **Beta**: overrides the shell WebSocket dialer (for testing); the shell API may change in a later release |
@@ -357,7 +357,10 @@ Requests cancellation of an execution.
 
 Uploads content to an absolute Sandbox path as a multipart request: query
 param `path`, form field `file`. `filename` defaults to
-`path.Base(sandboxPath)` when empty. Returns the decoded JSON array.
+`path.Base(sandboxPath)` when empty. Returns the decoded JSON array. The
+default transport streams the body and cannot replay it, so HTTP 307 and 308
+redirects return an `*APIError` instead of being followed. A custom
+`WithTransport` receives the complete multipart body as `[]byte`.
 
 #### `DownloadFile(ctx, sandboxID, sandboxPath string) (*FileDownload, error)`
 
