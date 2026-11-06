@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -66,5 +68,61 @@ func TestErrorHelpersUnwrapWrappedAPIError(t *testing.T) {
 	}
 	if IsNotFoundError(wrapped) {
 		t.Fatal("unexpected match")
+	}
+}
+
+func TestPathIDsAreEscapedOnTheWire(t *testing.T) {
+	var got atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.RequestURI)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	if _, err := c.Sandboxes.GetExecution(context.Background(), "task 1", "x?y#z%"); err != nil {
+		t.Fatal(err)
+	}
+	if v := got.Load(); v != "/tasks/task%201/executions/x%3Fy%23z%25" {
+		t.Fatalf("request URI = %v", v)
+	}
+}
+
+func TestInvalidPathIDsRejectedBeforeRequest(t *testing.T) {
+	c := newTestClient(t, "https://example.test",
+		WithTransport(func(_ context.Context, method, rawURL string, _ http.Header, _ []byte) (*RawResponse, error) {
+			t.Fatalf("unexpected request %s %s", method, rawURL)
+			return nil, nil
+		}),
+		WithStreamTransport(func(_ context.Context, method, rawURL string, _ http.Header, _ []byte) (*RawStream, error) {
+			t.Fatalf("unexpected stream %s %s", method, rawURL)
+			return nil, nil
+		}),
+		WithShellDialer(func(_ context.Context, wsURL string, _ http.Header) (ShellConn, error) {
+			t.Fatalf("unexpected shell dial %s", wsURL)
+			return nil, nil
+		}),
+	)
+	ctx := context.Background()
+	for _, id := range []string{"", ".", "..", "a/b", "../deployments/demo-agent"} {
+		calls := map[string]func() error{
+			"Sandboxes.Get":          func() error { _, err := c.Sandboxes.Get(ctx, id); return err },
+			"Sandboxes.Delete":       func() error { return c.Sandboxes.Delete(ctx, id) },
+			"Sandboxes.Launch":       func() error { _, err := c.Sandboxes.Launch(ctx, id, LaunchParams{IdcName: "idc-1"}); return err },
+			"Sandboxes.GetExecution": func() error { _, err := c.Sandboxes.GetExecution(ctx, "task-1", id); return err },
+			"Sandboxes.Stream":       func() error { _, err := c.Sandboxes.Stream(ctx, id); return err },
+			"Sandboxes.Shell":        func() error { _, err := c.Sandboxes.Shell(ctx, id); return err },
+			"Agents.Delete":          func() error { return c.Agents.Delete(ctx, id) },
+			"Agents.BuildLogs":       func() error { _, err := c.Agents.BuildLogs(ctx, "demo-agent", id, BuildLogParams{}); return err },
+			"Snapshots.Delete":       func() error { _, err := c.Snapshots.Delete(ctx, id); return err },
+		}
+		for name, call := range calls {
+			if err := call(); err == nil || !strings.Contains(err.Error(), "invalid ID") {
+				t.Fatalf("%s(%q): err = %v", name, id, err)
+			}
+		}
+	}
+	if err := (&Sandbox{client: c}).Delete(ctx); err == nil {
+		t.Fatal("deleted a Sandbox that has no ID")
 	}
 }

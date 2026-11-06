@@ -241,6 +241,19 @@ func TestSandboxPause(t *testing.T) {
 	}
 }
 
+func TestLaunchWithoutTaskIDIsAnError(t *testing.T) {
+	transport := func(_ context.Context, _, _ string, _ http.Header, _ []byte) (*RawResponse, error) {
+		return &RawResponse{StatusCode: http.StatusAccepted, Body: []byte(`{"container_id":"ctr-1","status":"pending"}`)}, nil
+	}
+	client, err := NewClient(WithAPIKey("test-key"), WithBaseURL("https://example.test"), WithTransport(transport))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandbox, err := client.Sandboxes.Launch(context.Background(), "demo-agent", LaunchParams{IdcName: "idc-us-1"}); err == nil {
+		t.Fatalf("launch without task_id returned sandbox %#v", sandbox.Data)
+	}
+}
+
 func hasSuffix(rawURL, suffix string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
