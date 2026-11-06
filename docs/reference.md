@@ -197,7 +197,8 @@ Sandboxes for this Agent.
 #### `agent.ListSandboxes(ctx, AgentSandboxListParams) (*Page[*Sandbox], error)`
 
 Same list. `Metadata` is an exact-match filter; keys are ANDed as
-`metadata[<key>]=<value>`.
+`metadata[<key>]=<value>`. An empty key or value is an error, so a missing
+label never widens the list.
 
 #### `ListBuilds(ctx, slug string) ([]TemplateBuild, error)`
 
@@ -247,7 +248,7 @@ Same body as `agent.Launch`. `LaunchParams.IdcName` is required here, unless
 |---|---|
 | `AgentID` | Restrict results to one Agent |
 | `Status` | `[]string`; joined with commas |
-| `Metadata` | Exact match per key, ANDed: `metadata[<key>]=<value>` |
+| `Metadata` | Exact match per key, ANDed: `metadata[<key>]=<value>`. An empty key or value is an error |
 | `Page` / `PageSize` | pagination |
 
 If `Status` is omitted, the API **excludes** `stopped` and `deleted`.

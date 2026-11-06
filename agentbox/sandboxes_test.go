@@ -117,6 +117,26 @@ func TestLaunchMetadataAndTimeout(t *testing.T) {
 	}
 }
 
+func TestListRejectsEmptyMetadataFilter(t *testing.T) {
+	transport := func(_ context.Context, method, rawURL string, _ http.Header, _ []byte) (*RawResponse, error) {
+		t.Fatalf("unexpected %s %s", method, rawURL)
+		return nil, nil
+	}
+	client, err := NewClient(WithAPIKey("test-key"), WithBaseURL("https://example.test"), WithTransport(transport))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &Agent{client: client, Data: map[string]any{"slug": "demo-agent"}}
+	for _, metadata := range []map[string]string{{"run": ""}, {"": "abc"}, {"run": "abc", "owner": ""}} {
+		if _, err := client.Sandboxes.List(context.Background(), SandboxListParams{Metadata: metadata}); err == nil {
+			t.Fatalf("Sandboxes.List accepted metadata %q", metadata)
+		}
+		if _, err := agent.ListSandboxes(context.Background(), AgentSandboxListParams{Metadata: metadata}); err == nil {
+			t.Fatalf("Agent.ListSandboxes accepted metadata %q", metadata)
+		}
+	}
+}
+
 func TestSandboxResume(t *testing.T) {
 	var calls []struct {
 		method string
