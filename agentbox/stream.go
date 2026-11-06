@@ -15,6 +15,17 @@ type StreamEvent struct {
 	Raw   string
 }
 
+// stripFieldSpace removes exactly one leading U+0020 from a field value, per
+// the SSE parsing model: "If value starts with a U+0020 SPACE character,
+// remove it from value." No other whitespace is touched.
+// https://html.spec.whatwg.org/multipage/server-sent-events.html
+func stripFieldSpace(v string) string {
+	if strings.HasPrefix(v, " ") {
+		return v[1:]
+	}
+	return v
+}
+
 // Stream is a pull-based reader over a Server-Sent Events response.
 type Stream struct {
 	raw *RawStream
@@ -60,9 +71,9 @@ func (s *Stream) Next() (StreamEvent, bool) {
 			}
 			return event, true
 		case strings.HasPrefix(line, "event:"):
-			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			eventName = stripFieldSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
-			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			dataLines = append(dataLines, stripFieldSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
 
