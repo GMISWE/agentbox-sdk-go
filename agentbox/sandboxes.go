@@ -419,7 +419,8 @@ type SandboxListParams struct {
 	AgentID string
 	Status  []string // if omitted, the API excludes "stopped" and "deleted"
 	// Metadata filters with an exact match on each key. Keys are ANDed.
-	// The query is metadata[<key>]=<value>.
+	// The query is metadata[<key>]=<value>. An empty key or value is an
+	// error rather than a dropped filter.
 	Metadata map[string]string
 	Page     int
 	PageSize int
@@ -476,12 +477,16 @@ func (sc *SandboxCollection) List(ctx context.Context, params SandboxListParams)
 		Page     int              `json:"page"`
 		PageSize int              `json:"page_size"`
 	}
-	err := sc.client.request(ctx, http.MethodGet, "/tasks", withMetadataQuery(compact(map[string]any{
+	query, err := withMetadataQuery(compact(map[string]any{
 		"deployment_id": nonEmptyString(params.AgentID),
 		"status":        nonEmptyString(statusValue),
 		"page":          page,
 		"page_size":     pageSize,
-	}), params.Metadata), nil, nil, &payload)
+	}), params.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	err = sc.client.request(ctx, http.MethodGet, "/tasks", query, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -862,17 +867,17 @@ func stringMapField(data map[string]any, key string) map[string]string {
 	}
 }
 
-func withMetadataQuery(query map[string]any, metadata map[string]string) map[string]any {
+func withMetadataQuery(query map[string]any, metadata map[string]string) (map[string]any, error) {
 	if query == nil {
 		query = map[string]any{}
 	}
 	for key, value := range metadata {
-		if key == "" {
-			continue
+		if key == "" || value == "" {
+			return nil, fmt.Errorf("agentbox: metadata filter needs a non-empty key and value, got %q=%q", key, value)
 		}
 		query["metadata["+key+"]"] = value
 	}
-	return query
+	return query, nil
 }
 
 func storagesOrNil(storages []map[string]any) any {

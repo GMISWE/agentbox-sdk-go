@@ -402,7 +402,9 @@ page, err = agent.ListSandboxes(ctx, agentbox.AgentSandboxListParams{Metadata: m
 ```
 
 The default Sandbox list **excludes** `stopped` and `deleted`.
-Pass `Status` when you need those.
+Pass `Status` when you need those. A `Metadata` filter with an empty key or
+value is an error rather than being dropped, so an unset label can never
+widen a list you are about to delete from.
 
 ## Delete
 

@@ -151,7 +151,8 @@ type AgentSandboxListParams struct {
 	Page     int
 	PageSize int
 	// Metadata filters with an exact match on each key. Keys are ANDed.
-	// The query is metadata[<key>]=<value>.
+	// The query is metadata[<key>]=<value>. An empty key or value is an
+	// error rather than a dropped filter.
 	Metadata map[string]string
 }
 
@@ -177,8 +178,11 @@ func (a *Agent) ListSandboxes(ctx context.Context, params AgentSandboxListParams
 		Page     int              `json:"page"`
 		PageSize int              `json:"page_size"`
 	}
-	err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s/tasks", a.Slug()),
-		withMetadataQuery(map[string]any{"page": page, "page_size": pageSize}, params.Metadata), nil, nil, &payload)
+	query, err := withMetadataQuery(map[string]any{"page": page, "page_size": pageSize}, params.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	err = a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s/tasks", a.Slug()), query, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
