@@ -736,6 +736,11 @@ All SDK errors are ordinary Go `error` values; use `errors.As` to unwrap
 | `*SnapshotFailed` | `WaitUntilReady` hit `error`, `deleting` or `delete_failed` |
 | `*SnapshotWaitTimeout` | `WaitUntilReady` exceeded `Timeout` |
 
+Arguments are checked before any request is sent: every ID and slug is
+path-escaped as one path segment, and an empty ID, `.`, `..` or an ID
+containing `/` is an error. `Launch` also returns an error when the response
+has no `task_id`.
+
 `TransportError` has `Message` and `Err` (the cause) and implements `Unwrap`,
 so `errors.Is` / `errors.As` reach the cause. `Stream.Err()` returns a
 `*TransportError`.

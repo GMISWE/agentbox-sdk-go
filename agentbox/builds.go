@@ -80,10 +80,14 @@ func (a *Agent) BuildLogs(ctx context.Context, buildID string, params BuildLogPa
 // ListBuilds returns up to the newest 100 template builds for a sandbox
 // deployment slug. Container deployments return HTTP 501 (IsNotSupportedError).
 func (a *AgentCollection) ListBuilds(ctx context.Context, slug string) ([]TemplateBuild, error) {
+	endpoint, err := resourcePath("/deployments/%s/builds", slug)
+	if err != nil {
+		return nil, err
+	}
 	var payload struct {
 		Builds []TemplateBuild `json:"builds"`
 	}
-	err := a.client.request(ctx, http.MethodGet, "/deployments/"+slug+"/builds", nil, nil, nil, &payload)
+	err = a.client.request(ctx, http.MethodGet, endpoint, nil, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -95,8 +99,12 @@ func (a *AgentCollection) ListBuilds(ctx context.Context, slug string) ([]Templa
 
 // GetBuild returns one template build for a deployment slug.
 func (a *AgentCollection) GetBuild(ctx context.Context, slug, buildID string) (TemplateBuild, error) {
+	endpoint, err := resourcePath("/deployments/%s/builds/%s", slug, buildID)
+	if err != nil {
+		return TemplateBuild{}, err
+	}
 	var build TemplateBuild
-	err := a.client.request(ctx, http.MethodGet, "/deployments/"+slug+"/builds/"+buildID, nil, nil, nil, &build)
+	err = a.client.request(ctx, http.MethodGet, endpoint, nil, nil, nil, &build)
 	if err != nil {
 		return TemplateBuild{}, err
 	}
@@ -106,8 +114,12 @@ func (a *AgentCollection) GetBuild(ctx context.Context, slug, buildID string) (T
 // BuildLogs reads one page of template build logs for a deployment slug.
 // See Agent.BuildLogs.
 func (a *AgentCollection) BuildLogs(ctx context.Context, slug, buildID string, params BuildLogParams) (BuildLogPage, error) {
+	endpoint, err := resourcePath("/deployments/%s/builds/%s/logs", slug, buildID)
+	if err != nil {
+		return BuildLogPage{}, err
+	}
 	var page BuildLogPage
-	err := a.client.request(ctx, http.MethodGet, "/deployments/"+slug+"/builds/"+buildID+"/logs", buildLogQuery(params), nil, nil, &page)
+	err = a.client.request(ctx, http.MethodGet, endpoint, buildLogQuery(params), nil, nil, &page)
 	if err != nil {
 		return BuildLogPage{}, err
 	}

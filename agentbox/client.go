@@ -179,6 +179,17 @@ func joinURL(baseURL, path string) string {
 	return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
 }
 
+func resourcePath(format string, ids ...string) (string, error) {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		if id == "" || id == "." || id == ".." || strings.Contains(id, "/") {
+			return "", fmt.Errorf("agentbox: invalid ID %q for %s", id, strings.ReplaceAll(format, "%s", "{id}"))
+		}
+		args[i] = url.PathEscape(id)
+	}
+	return fmt.Sprintf(format, args...), nil
+}
+
 func queryURL(rawURL string, params map[string]any) string {
 	values := url.Values{}
 	for key, value := range params {

@@ -206,10 +206,14 @@ type SnapshotCollection struct {
 // creator nor an org owner. HTTP 409 snapshot_not_settled means the snapshot
 // is still creating or is being deleted.
 func (sc *SnapshotCollection) Rename(ctx context.Context, snapshotID, name string) (*Snapshot, error) {
+	endpoint, err := resourcePath("/snapshots/%s", snapshotID)
+	if err != nil {
+		return nil, err
+	}
 	var payload struct {
 		Snapshot map[string]any `json:"snapshot"`
 	}
-	err := sc.client.request(ctx, http.MethodPatch, fmt.Sprintf("/snapshots/%s", snapshotID), nil, map[string]any{
+	err = sc.client.request(ctx, http.MethodPatch, endpoint, nil, map[string]any{
 		"name": name,
 	}, nil, &payload)
 	if err != nil {
@@ -226,11 +230,15 @@ func (sc *SnapshotCollection) Rename(ctx context.Context, snapshotID, name strin
 // from it once deletion is accepted. HTTP 409 snapshot_conflict means
 // upstream refused it.
 func (sc *SnapshotCollection) Delete(ctx context.Context, snapshotID string) (*SnapshotDeletion, error) {
+	endpoint, err := resourcePath("/snapshots/%s", snapshotID)
+	if err != nil {
+		return nil, err
+	}
 	var payload struct {
 		SnapshotID string `json:"snapshot_id"`
 		Status     string `json:"status"`
 	}
-	err := sc.client.request(ctx, http.MethodDelete, fmt.Sprintf("/snapshots/%s", snapshotID), nil, nil, nil, &payload)
+	err = sc.client.request(ctx, http.MethodDelete, endpoint, nil, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +259,10 @@ func (sc *SnapshotCollection) Delete(ctx context.Context, snapshotID string) (*S
 // means upstream refused it, e.g. the sandbox is not running. HTTP 422
 // sandbox_only_operation means the task is not a sandbox.
 func (sc *SandboxCollection) CreateSnapshot(ctx context.Context, sandboxID string, params CreateSnapshotParams) (*Snapshot, error) {
+	endpoint, err := resourcePath("/tasks/%s/snapshots", sandboxID)
+	if err != nil {
+		return nil, err
+	}
 	var body any
 	if params.Name != "" {
 		body = map[string]any{"name": params.Name}
@@ -258,7 +270,7 @@ func (sc *SandboxCollection) CreateSnapshot(ctx context.Context, sandboxID strin
 	var payload struct {
 		Snapshot map[string]any `json:"snapshot"`
 	}
-	err := sc.client.request(ctx, http.MethodPost, fmt.Sprintf("/tasks/%s/snapshots", sandboxID), nil, body, nil, &payload)
+	err = sc.client.request(ctx, http.MethodPost, endpoint, nil, body, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -284,10 +296,14 @@ func (s *Sandbox) CreateSnapshot(ctx context.Context, params CreateSnapshotParam
 //
 // HTTP 422 sandbox_only_operation means the Agent is not a sandbox runtime.
 func (a *AgentCollection) ListSnapshots(ctx context.Context, slug string) ([]*Snapshot, error) {
+	endpoint, err := resourcePath("/deployments/%s/snapshots", slug)
+	if err != nil {
+		return nil, err
+	}
 	var payload struct {
 		Snapshots []map[string]any `json:"snapshots"`
 	}
-	err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s/snapshots", slug), nil, nil, nil, &payload)
+	err = a.client.request(ctx, http.MethodGet, endpoint, nil, nil, nil, &payload)
 	if err != nil {
 		return nil, err
 	}
