@@ -3,6 +3,7 @@ package agentbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -271,6 +272,28 @@ func (s *Sandbox) Stream(ctx context.Context) (*Stream, error) {
 // ExecuteParams.Wait left nil) blocks until the command completes.
 func (s *Sandbox) Execute(ctx context.Context, command string, params ExecuteParams) (*Execution, error) {
 	return s.client.Sandboxes.Execute(ctx, s.ID(), command, params)
+}
+
+// decodeExecution reads the body of an Execute or CancelExecution reply. An
+// empty body is an Execution with no data, as before. A body that is not a
+// JSON object (cut off, an HTML error page from a proxy, null, an array) is an
+// error: the old code swallowed it and returned an Execution with no ID that
+// looked like a command that had completed, where GetExecution rejects the
+// same bytes.
+func decodeExecution(resp *RawResponse) (*Execution, error) {
+	data := map[string]any{}
+	if len(resp.Body) > 0 {
+		var parsed any
+		if err := json.Unmarshal(resp.Body, &parsed); err != nil {
+			return nil, fmt.Errorf("agentbox: decode execution response: %w", err)
+		}
+		obj, ok := parsed.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("agentbox: execution response is not a JSON object")
+		}
+		data = obj
+	}
+	return &Execution{Data: data, Accepted: resp.StatusCode == http.StatusAccepted}, nil
 }
 
 // GetExecution retrieves the latest state of an execution.
@@ -658,11 +681,7 @@ func (sc *SandboxCollection) Execute(ctx context.Context, sandboxID, command str
 	if err != nil {
 		return nil, err
 	}
-	data, _ := jsonLoads(resp.Body).(map[string]any)
-	if data == nil {
-		data = map[string]any{}
-	}
-	return &Execution{Data: data, Accepted: resp.StatusCode == http.StatusAccepted}, nil
+	return decodeExecution(resp)
 }
 
 // GetExecution retrieves the latest state of an execution.
@@ -681,11 +700,7 @@ func (sc *SandboxCollection) CancelExecution(ctx context.Context, sandboxID, exe
 	if err != nil {
 		return nil, err
 	}
-	data, _ := jsonLoads(resp.Body).(map[string]any)
-	if data == nil {
-		data = map[string]any{}
-	}
-	return &Execution{Data: data, Accepted: resp.StatusCode == http.StatusAccepted}, nil
+	return decodeExecution(resp)
 }
 
 // UploadFile uploads content to an absolute Sandbox path. filename is used
