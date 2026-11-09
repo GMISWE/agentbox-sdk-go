@@ -50,6 +50,7 @@ type Client struct {
 	streamTransport StreamTransport
 	shellDialer     ShellDialer
 	sleep           func(time.Duration)
+	retry           RetryPolicy
 
 	Agents    *AgentCollection
 	Sandboxes *SandboxCollection
@@ -103,6 +104,12 @@ func WithShellDialer(dialer ShellDialer) Option {
 // (for testing).
 func WithSleep(sleep func(time.Duration)) Option {
 	return func(c *Client) { c.sleep = sleep }
+}
+
+// WithRetry turns on retries of rate-limited and briefly unavailable replies.
+// It is off unless set. See RetryPolicy for what is retried.
+func WithRetry(policy RetryPolicy) Option {
+	return func(c *Client) { c.retry = policy }
 }
 
 func defaultAPIKey() string { return os.Getenv("GMI_AGENTBOX_API_KEY") }
@@ -266,6 +273,16 @@ func (c *Client) requestRaw(ctx context.Context, method, path string, params map
 	}
 
 	resp, err := c.transport(ctx, method, fullURL, requestHeaders, encodedBody)
+	for attempt := 1; err == nil; attempt++ {
+		delay, again := c.retry.next(attempt, method, resp)
+		if !again {
+			break
+		}
+		if err = waitFor(ctx, delay); err != nil {
+			return nil, err
+		}
+		resp, err = c.transport(ctx, method, fullURL, requestHeaders, encodedBody)
+	}
 	if err != nil {
 		return nil, err
 	}
