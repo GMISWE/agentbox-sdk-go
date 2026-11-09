@@ -22,10 +22,35 @@ func NewClient(opts ...Option) (*Client, error)
 | `WithTransport(t)` | internal default | Overrides the request/response transport (for testing) |
 | `WithStreamTransport(t)` | internal default | Overrides the streaming transport (for testing) |
 | `WithSleep(f)` | `time.Sleep` | Overrides the sleep function used by `WaitUntilRunning` polling |
+| `WithRetry(p)` | off | Repeats a request after a 429, or after a 502, 503 or 504 for GET and HEAD. See [Retries](#retries) |
 | `WithShellDialer(d)` | internal default | **Beta**: overrides the shell WebSocket dialer (for testing); the shell API may change in a later release |
 
 `NewClient` trims whitespace from the API key and a trailing `/` from the base
 URL. The result is exposed as `Client.APIKey` and `Client.BaseURL`.
+
+### Retries
+
+Nothing is retried unless you pass `WithRetry`:
+
+```go
+client, err := agentbox.NewClient(agentbox.WithRetry(agentbox.RetryPolicy{
+    MaxAttempts: 4,                 // total tries, the first included; 0 or 1 = no retry
+    BaseDelay:   500 * time.Millisecond, // first backoff, doubled each attempt, with jitter (default 500ms)
+    MaxDelay:    10 * time.Second,  // cap of one wait (default 10s)
+}))
+```
+
+| Reply | Repeated for |
+|---|---|
+| 429 | any method: the gateway did not process the request |
+| 502, 503, 504 | `GET` and `HEAD` only: a `POST` may already have started a sandbox or a command |
+
+A network error is returned as it is. The wait before the next try is the
+reply's `Retry-After` (seconds or an HTTP date) when it has one, else the
+backoff. A `Retry-After` longer than `MaxDelay` is not waited for: the 429 comes
+back as the error. The wait ends early with the context's error when the
+context is done. After the last attempt the final reply is the error, as
+without `WithRetry`.
 
 Redirects: the default clients (request and stream) follow at most 5
 redirects, only to `http` or `https` targets, and drop `Authorization` and
@@ -795,7 +820,7 @@ import "github.com/GMISWE/agentbox-sdk-go/agentbox"
 ```
 DefaultBaseURL, DefaultWaitTimeout, Version
 Client, Option, WithAPIKey, WithBaseURL, WithTimeout, WithHTTPClient,
-    WithTransport, WithStreamTransport, WithShellDialer, WithSleep
+    WithTransport, WithStreamTransport, WithShellDialer, WithSleep, WithRetry, RetryPolicy
 Transport, StreamTransport, RawResponse, RawStream
 ShellConn, ShellMessage, ShellDialer, SendShellInput, ResizeShell,
     RecvShellMessage, DecodeShellMessage
