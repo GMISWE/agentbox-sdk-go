@@ -177,7 +177,7 @@ func (a *Agent) ListSandboxes(ctx context.Context, params AgentSandboxListParams
 		Page     int              `json:"page"`
 		PageSize int              `json:"page_size"`
 	}
-	err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s/tasks", a.Slug()),
+	err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s/tasks", pathSeg(a.Slug())),
 		withMetadataQuery(map[string]any{"page": page, "page_size": pageSize}, params.Metadata), nil, nil, &payload)
 	if err != nil {
 		return nil, err
@@ -282,7 +282,7 @@ func (a *AgentCollection) List(ctx context.Context, page, pageSize int) (*Page[*
 // Get retrieves an Agent by slug.
 func (a *AgentCollection) Get(ctx context.Context, slug string) (*Agent, error) {
 	var payload map[string]any
-	if err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s", slug), nil, nil, nil, &payload); err != nil {
+	if err := a.client.request(ctx, http.MethodGet, fmt.Sprintf("/deployments/%s", pathSeg(slug)), nil, nil, nil, &payload); err != nil {
 		return nil, err
 	}
 	return &Agent{client: a.client, Data: payload}, nil
@@ -292,7 +292,7 @@ func (a *AgentCollection) Get(ctx context.Context, slug string) (*Agent, error) 
 // API accepts; locked fields return HTTP 422.
 func (a *AgentCollection) Update(ctx context.Context, slug string, fields AgentUpdateFields) (*Agent, error) {
 	var payload map[string]any
-	err := a.client.request(ctx, http.MethodPatch, fmt.Sprintf("/deployments/%s", slug), nil, compact(fields), nil, &payload)
+	err := a.client.request(ctx, http.MethodPatch, fmt.Sprintf("/deployments/%s", pathSeg(slug)), nil, compact(fields), nil, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +303,7 @@ func (a *AgentCollection) Update(ctx context.Context, slug string, fields AgentU
 // while the Agent still has sandboxes, and can keep returning 409 for a few
 // seconds after the last one is deleted; delete the sandboxes first and retry.
 func (a *AgentCollection) Delete(ctx context.Context, slug string) error {
-	return a.client.request(ctx, http.MethodDelete, fmt.Sprintf("/deployments/%s", slug), nil, nil, nil, nil)
+	return a.client.request(ctx, http.MethodDelete, fmt.Sprintf("/deployments/%s", pathSeg(slug)), nil, nil, nil, nil)
 }
 
 func stringField(data map[string]any, key string) string {

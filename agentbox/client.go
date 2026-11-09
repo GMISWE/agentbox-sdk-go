@@ -175,6 +175,18 @@ func NewClient(opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+// pathSeg escapes one URL path segment such as a slug or an ID, so a "/", "?" or "#" in it cannot change
+// the route. url.PathEscape leaves "." and ".." alone, so those two are escaped as well.
+func pathSeg(s string) string {
+	switch s {
+	case ".":
+		return "%2E"
+	case "..":
+		return "%2E%2E"
+	}
+	return url.PathEscape(s)
+}
+
 func joinURL(baseURL, path string) string {
 	return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
 }
