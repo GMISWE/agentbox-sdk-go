@@ -21,7 +21,7 @@ func NewClient(opts ...Option) (*Client, error)
 | `WithHTTPClient(c)` | internal default | Overrides the `*http.Client` used by the default request transport (not streams). See redirect policy below |
 | `WithTransport(t)` | internal default | Overrides the request/response transport (for testing) |
 | `WithStreamTransport(t)` | internal default | Overrides the streaming transport (for testing) |
-| `WithSleep(f)` | `time.Sleep` | Overrides the sleep function used by `WaitUntilRunning` polling |
+| `WithSleep(f)` | context-aware timer | Overrides the sleep used by `WaitUntilRunning` and `WaitUntilReady` polling (for testing). The duration is capped to the remaining wait timeout |
 | `WithShellDialer(d)` | internal default | **Beta**: overrides the shell WebSocket dialer (for testing); the shell API may change in a later release |
 
 `NewClient` trims whitespace from the API key and a trailing `/` from the base
@@ -522,6 +522,10 @@ Polls until `Status() == "running"`; a new sandbox is `pending` first. Defaults:
 | `running` | returns `nil` |
 | `error`, `deleted`, `stopped`, `stopping` | returns `*SandboxFailed` |
 | timeout | returns `*SandboxWaitTimeout` |
+| `ctx` canceled | returns the context error |
+
+`Timeout` bounds the whole wait, including each refresh request. A status
+received after the deadline is not reported as success.
 
 `SandboxFailed.Status` is the sandbox status; `SandboxFailed.Message` is
 `LastError()` when set.
@@ -620,6 +624,9 @@ Polls until `Status() == "ready"`. Defaults: `Timeout: DefaultWaitTimeout`,
 | `ready` | returns `nil` |
 | `error`, `deleting`, `delete_failed` | returns `*SnapshotFailed` |
 | timeout | returns `*SnapshotWaitTimeout` |
+| `ctx` canceled | returns the context error |
+
+`Timeout` bounds the whole wait, including each refresh request.
 
 `SnapshotFailed.Message` is `StatusReason()` when set.
 
