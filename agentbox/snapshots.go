@@ -123,10 +123,30 @@ func (s *Snapshot) WaitUntilReady(ctx context.Context, params WaitUntilReadyPara
 	}
 
 	deadline := time.Now().Add(timeout)
-	if err := s.Refresh(ctx); err != nil {
-		return err
+	timeoutErr := &SnapshotWaitTimeout{
+		Message: fmt.Sprintf("snapshot %s did not reach ready within %s", s.ID(), timeout),
 	}
+	waitCtx, cancel := context.WithDeadlineCause(ctx, deadline, timeoutErr)
+	defer cancel()
 	for {
+		if waitCtx.Err() != nil {
+			return context.Cause(waitCtx)
+		}
+		if !time.Now().Before(deadline) {
+			return timeoutErr
+		}
+		if err := s.Refresh(waitCtx); err != nil {
+			if waitCtx.Err() != nil {
+				return context.Cause(waitCtx)
+			}
+			return err
+		}
+		if waitCtx.Err() != nil {
+			return context.Cause(waitCtx)
+		}
+		if !time.Now().Before(deadline) {
+			return timeoutErr
+		}
 		status := s.Status()
 		if status == snapshotReadyStatus {
 			return nil
@@ -138,14 +158,8 @@ func (s *Snapshot) WaitUntilReady(ctx context.Context, params WaitUntilReadyPara
 			}
 			return &SnapshotFailed{Status: status, Message: message}
 		}
-		if !time.Now().Before(deadline) {
-			return &SnapshotWaitTimeout{
-				Message: fmt.Sprintf("snapshot %s still %q after %s", s.ID(), status, timeout),
-			}
-		}
-		s.client.sleep(pollInterval)
-		if err := s.Refresh(ctx); err != nil {
-			return err
+		if err := s.client.pollWait(waitCtx, pollInterval); err != nil {
+			return context.Cause(waitCtx)
 		}
 	}
 }

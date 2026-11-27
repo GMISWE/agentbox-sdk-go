@@ -99,8 +99,9 @@ func WithShellDialer(dialer ShellDialer) Option {
 	return func(c *Client) { c.shellDialer = dialer }
 }
 
-// WithSleep overrides the sleep function used by WaitUntilRunning polling
-// (for testing).
+// WithSleep overrides the sleep function used by readiness polling (for
+// testing). The duration is capped to the remaining wait timeout; a custom
+// sleep function must return promptly because it cannot be interrupted.
 func WithSleep(sleep func(time.Duration)) Option {
 	return func(c *Client) { c.sleep = sleep }
 }
@@ -133,7 +134,6 @@ func NewClient(opts ...Option) (*Client, error) {
 		APIKey:  defaultAPIKey(),
 		BaseURL: defaultBaseURL(),
 		timeout: 30 * time.Second,
-		sleep:   time.Sleep,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -173,6 +173,27 @@ func NewClient(opts ...Option) (*Client, error) {
 	c.Snapshots = &SnapshotCollection{client: c}
 
 	return c, nil
+}
+
+func (c *Client) pollWait(ctx context.Context, interval time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.sleep != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			interval = min(interval, max(time.Until(deadline), 0))
+		}
+		c.sleep(interval)
+		return ctx.Err()
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return ctx.Err()
+	}
 }
 
 func joinURL(baseURL, path string) string {
